@@ -2,6 +2,14 @@
 
 一个 Worker 同时托管前端 SPA（Static Assets）与 `/api/*` 接口，绑定 D1 / R2 / KV / Queues，Cron 兜底轮询。
 
+## 一键部署（Deploy to Cloudflare 按钮）
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gongbin/manju-studio)
+
+按钮会 fork 仓库、自动创建并绑定 D1/R2/KV/Queues、构建并部署。引导中若询问构建设置：根目录 `app`、构建命令 `npm run build`、部署命令 `npx wrangler deploy`。部署后调用一次 `POST /api/_seed`（请求头 `x-seed-key: dev`）灌入演示数据。
+
+> 偏好命令行 / 需要精确控制资源，用下面的脚本或手动步骤。
+
 ## 架构
 
 ```

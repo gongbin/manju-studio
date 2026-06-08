@@ -4,13 +4,28 @@
 
 > 建立在「火山方舟 Seedance / 即梦」视频生成能力之上，但**视频模型 / LLM / TTS 三类能力均可插拔**，火山只是首个实现。
 
+## 一键部署到 Cloudflare
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gongbin/manju-studio)
+
+点击按钮 → Cloudflare 会 fork 本仓库、按引导**自动创建 D1 / R2 / KV / Queues 资源并注入绑定**、构建并部署 Worker（前端 SPA + `/api/*` 同一 Worker）。引导中若询问构建设置，请填：
+
+| 项 | 值 |
+|---|---|
+| Root directory（根目录） | `app` |
+| Build command（构建命令） | `npm run build` |
+| Deploy command（部署命令） | `npx wrangler deploy` |
+
+部署完成后，首次访问需灌入演示数据：`POST /api/_seed`，请求头 `x-seed-key: dev`（生产请改 `SEED_KEY`）。
+更完整的部署/对接真实火山生成说明见 [`app/DEPLOY.md`](./app/DEPLOY.md)（含命令行一键脚本 `npm run cf:provision`）。
+
 ## 仓库结构
 
 | 目录 | 内容 |
 |---|---|
-| [`docs/`](./docs) | 产品需求文档（PRD）与技术设计文档（TECH_DESIGN） |
-| [`demo-ui/`](./demo-ui) | 交互式 UI 设计原型（单文件 React 原型，作为设计参考，勿改） |
 | [`app/`](./app) | **真实应用**：前端 TanStack + Base UI（Vite/TS）+ 后端 Cloudflare Worker（Hono + Drizzle + D1 + R2 + KV + Queues） |
+
+> 注：UI 设计原型 `demo-ui/` 与规划文档 `docs/`（PRD、技术设计）仅在本地保留，未纳入本仓库。
 
 ## 快速开始
 

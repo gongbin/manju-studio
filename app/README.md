@@ -1,6 +1,8 @@
 # 漫剧工坊 ManjuStudio · Web App
 
-TanStack + Base UI 实现的漫剧创作协作前端。UI 设计参考 [`../demo-ui`](../demo-ui)（交互原型），产品/技术规格见 [`../docs`](../docs)。
+TanStack + Base UI 实现的漫剧创作协作前端（设计参考 `../demo-ui` 原型与 `../docs` 规格文档，二者仅本地保留、未纳入仓库）。
+
+一键部署：[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gongbin/manju-studio) · 详见 [`DEPLOY.md`](./DEPLOY.md)。
 
 ## 技术栈
 

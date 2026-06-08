@@ -1,0 +1,7 @@
+# Copy to `.dev.vars` for `wrangler dev` (do NOT commit .dev.vars).
+# In production set these with: wrangler secret put <NAME>
+CREDENTIAL_ENC_KEY="dev-only-32-byte-key-change-me!!"
+SEED_KEY="dev"
+# Optional: configure to make generation tasks call the real 火山方舟 Ark API.
+# When empty, the queue consumer simulates provider progress so the app works out of the box.
+VOLC_ARK_API_KEY=""

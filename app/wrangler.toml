@@ -1,0 +1,53 @@
+# 漫剧工坊 ManjuStudio — Cloudflare Worker (API) + Static Assets (SPA)
+# 一个 Worker 同时托管前端静态资源与 /api/* 接口，绑定 D1 / R2 / KV / Queues。
+name = "manju-studio"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ---- 前端静态资源（Vite 构建产物）。/api/* 优先交给 Worker 处理 ----
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Worker runs first for every request; index.ts routes /api/* to Hono and
+# delegates everything else to the assets binding (env.ASSETS.fetch).
+run_worker_first = true
+
+# ---- D1 关系库（业务主数据）----
+[[d1_databases]]
+binding = "DB"
+database_name = "manju-db"
+database_id = "REPLACE_WITH_D1_ID"   # deploy.sh 会自动填入
+migrations_dir = "migrations"
+
+# ---- R2 对象存储（图/视频/音频素材与产物镜像）----
+[[r2_buckets]]
+binding = "ASSETS_BUCKET"
+bucket_name = "manju-assets"
+
+# ---- KV（会话 / 热点缓存）----
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "REPLACE_WITH_KV_ID"            # deploy.sh 会自动填入
+
+# ---- Queues（生成任务异步处理）----
+[[queues.producers]]
+binding = "TASK_QUEUE"
+queue = "manju-tasks"
+
+[[queues.consumers]]
+queue = "manju-tasks"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+
+# ---- Cron（兜底轮询 / 对账 / 配额重置）----
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+SEED_KEY = "dev"            # 生产请改为强随机；用于 POST /api/_seed 保护
+# 机密用 `wrangler secret put` 注入，不要写进本文件：
+#   CREDENTIAL_ENC_KEY  —— 凭据 AES-GCM 加密密钥
+#   VOLC_ARK_API_KEY    —— （可选）火山方舟数据面 APIKey，配置后任务走真实生成

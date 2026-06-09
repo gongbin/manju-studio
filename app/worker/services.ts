@@ -4,10 +4,18 @@ import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import * as S from './db/schema';
 import type { Env } from './env';
 import { registry } from './providers';
+import { decryptSecret, encKeyOf } from './crypto';
 
 type Db = DrizzleD1Database<typeof S>;
 const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2, 9)}`;
 const now = () => new Date().toISOString();
+
+/** Resolve a provider's API key: platform-configured (encrypted in DB) first, then env. */
+export async function providerKey(db: Db, teamId: string, env: Env, family: string): Promise<string | null> {
+  const row = await db.select().from(S.providerCredentials).where(and(eq(S.providerCredentials.teamId, teamId), eq(S.providerCredentials.family, family))).get();
+  if (row?.secretCiphertext) { const k = await decryptSecret(encKeyOf(env), row.secretCiphertext); if (k) return k; }
+  return null;
+}
 
 export async function audit(db: Db, teamId: string, e: { actor?: string; action: string; target?: string; diff?: string; src?: string }) {
   await db.insert(S.auditLogs).values({ id: uid('a'), teamId, actor: e.actor ?? null, action: e.action, target: e.target ?? null, diff: e.diff ?? null, src: e.src ?? 'Web', time: now() });
@@ -50,10 +58,11 @@ export async function advanceTask(db: Db, env: Env, taskId: string, teamId: stri
   let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';
   let videoUrl: string | null = null;
 
-  // Real provider path
-  if (env.VOLC_ARK_API_KEY && !isEnhance && t.ptid) {
+  // Real provider path — key from platform config (video) or env fallback.
+  const arkKey = (await providerKey(db, teamId, env, 'video')) ?? env.VOLC_ARK_API_KEY ?? null;
+  if (arkKey && !isEnhance && t.ptid) {
     try {
-      const pt = await registry.videoProvider()!.getTask(t.ptid, env);
+      const pt = await registry.videoProvider()!.getTask(t.ptid, arkKey);
       state = pt.state;
       next = pt.progress ?? next;
       if (pt.videoUrl) videoUrl = pt.videoUrl;

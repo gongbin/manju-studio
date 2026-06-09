@@ -33,19 +33,21 @@ function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => voi
   const s = useSettings();
   const qc = useQueryClient();
   const tts = cred.tts;
+  // 火山 数据面 (Ark video) → family 'video'; TTS → 'tts'; 控制面 AK/SK 暂为演示。
+  const family = tts ? 'tts' : cred.plane === 'data' ? 'video' : null;
   const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.getCredentials });
-  const status = tts ? creds?.['tts'] : undefined;
+  const status = family ? creds?.[family] : undefined;
   const [keyInput, setKeyInput] = useState('');
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
     try {
-      if (tts && keyInput.trim()) { await api.saveCredential('tts', keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
+      if (family && keyInput.trim()) { await api.saveCredential(family, keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
       toast('凭据已加密保存', 'lock');
       onClose();
     } catch (e) { toast('保存失败：' + (e instanceof Error ? e.message : e), 'warn'); setSaving(false); }
   };
-  const removeKey = async () => { await api.deleteCredential('tts'); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); toast('已删除该 Key', 'trash'); };
+  const removeKey = async () => { if (!family) return; await api.deleteCredential(family); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); toast('已删除该 Key', 'trash'); };
   return (
     <div style={{ width: 'min(460px, 94vw)' }}>
       <div className="row gap10" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line)' }}>
@@ -64,8 +66,12 @@ function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => voi
             <div className="faint" style={{ fontSize: 11 }}>兼容任意 OpenAI 风格 TTS 端点（第三方代理或自建）；base_url 与模型名即时保存，密钥加密落库，<b>改 Key 无需重新部署</b>。</div>
           </>
         ) : cred.plane === 'data' ? (
-          <label><span className="lbl">API Key（数据面）</span>
-            <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" defaultValue="ak-volc-7f3a91d2c4b8e6f0" placeholder="粘贴 APIKey" /></div></label>
+          <>
+            <label><span className="lbl">火山方舟 数据面 API Key {status?.set && <span className="faint">· 已配置 <span className="mono">{status.hint}</span></span>}</span>
+              <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder={status?.set ? '留空则保留现有 Key' : '粘贴火山方舟 Ark APIKey（视频生成）'} /></div></label>
+            {status?.set && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={removeKey}><Icon name="trash" size={13} />删除已保存的 Key</button>}
+            <div className="faint" style={{ fontSize: 11 }}>用于 content_generation 视频生成（Authorization: Bearer）。配置后镜头生成走真实火山 API，<b>改 Key 无需重新部署</b>；未配置则走本地模拟。</div>
+          </>
         ) : (
           <>
             <label><span className="lbl">Access Key ID（AK）</span><div className="search" style={{ height: 38 }}><Icon name="users" size={15} className="faint" /><input defaultValue="AKLTN2QwM2I5N2f3a" /></div></label>
@@ -173,8 +179,8 @@ export function Settings() {
                 </div>
                 <div className="row gap12" style={{ padding: '12px 14px', borderBottom: '1px solid var(--line)' }}>
                   <Icon name="cpu" size={16} className="faint" />
-                  <div className="grow"><div className="row gap8"><b style={{ fontSize: 13 }}>数据面 · API Key</b><span className="tag" style={{ height: 18, fontSize: 10 }}>视频 / 文生图 / LLM / TTS</span></div><div className="faint" style={{ fontSize: 11, marginTop: 2 }}>调用 content_generation（Seedance / 即梦）· Authorization: Bearer</div><div className="mono" style={{ fontSize: 11, marginTop: 4 }}>APIKey ••••••••••••3a91 <span className="faint">(已加密)</span></div></div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data' })}>更新</button>
+                  <div className="grow"><div className="row gap8 wrap"><b style={{ fontSize: 13 }}>数据面 · API Key</b><span className="tag" style={{ height: 18, fontSize: 10 }}>视频生成</span>{creds?.['video']?.set ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />Key {creds['video'].hint}</span> : <span className="pill" style={{ color: 'var(--st-draft)', background: 'var(--st-draft-bg)' }}>未配置 Key · 走模拟</span>}</div><div className="faint" style={{ fontSize: 11, marginTop: 2 }}>调用 content_generation（Seedance / 即梦）· Authorization: Bearer</div></div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data' })}>{creds?.['video']?.set ? '更新' : '配置'}</button>
                 </div>
                 <div className="row gap12" style={{ padding: '12px 14px' }}>
                   <Icon name="lock" size={16} className="faint" />

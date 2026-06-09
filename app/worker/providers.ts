@@ -1,7 +1,6 @@
 // Provider abstraction (docs §3). Video / LLM / TTS are independent, pluggable
 // families. VolcengineProvider is the first video implementation; new vendors
 // implement the same interface and self-register — business code is untouched.
-import type { Env } from './env';
 import { breakdownMessages, heuristicBreakdown, normalizeBreakdown, parseJsonLoose, DEFAULT_BREAKDOWN_PROMPT, type BreakdownResult } from '../src/lib/breakdown';
 
 export type Capability = 'text-to-video' | 'image-to-video' | 'text-to-image' | 'video-enhance' | 'text-to-speech';
@@ -11,7 +10,7 @@ export interface GenerateInput {
   modelId: string;
   capability: Capability;
   prompt: { visual?: string; dialogue?: string; voiceover?: string; soundEffects?: string; cameraPosition?: string; cameraMovement?: string };
-  params: { resolution?: string; ratio?: string; duration?: number; generateAudio?: boolean; watermark?: boolean };
+  params: { resolution?: string; ratio?: string; duration?: number; generateAudio?: boolean; watermark?: boolean; webSearch?: boolean };
   references?: { images?: string[]; videos?: string[]; audios?: string[]; characterAssetId?: string };
 }
 
@@ -26,20 +25,26 @@ export interface ProviderTask {
 export interface VideoProvider {
   readonly name: string;
   readonly capabilities: Capability[];
-  /** Returns null when no real credential is configured (caller falls back to simulation). */
-  createTask(input: GenerateInput, env: Env): Promise<ProviderTask | null>;
-  getTask(providerTaskId: string, env: Env): Promise<ProviderTask>;
+  /** Returns null when no API key is available (caller falls back to simulation). */
+  createTask(input: GenerateInput, apiKey: string | null): Promise<ProviderTask | null>;
+  getTask(providerTaskId: string, apiKey: string): Promise<ProviderTask>;
 }
 
 const ARK_BASE = 'https://ark.cn-beijing.volces.com/api/v3';
+// Internal model id → real 火山方舟 Ark model id (matches seedance-app). Already-real
+// ids (doubao-* / ep-*) pass through, so users can also pick a custom endpoint id.
+const ARK_MODEL: Record<string, string> = {
+  'seedance-2.0': 'doubao-seedance-2-0-260128',
+  'seedance-2.0-fast': 'doubao-seedance-2-0-fast-260128',
+};
+const arkModelId = (id: string) => (/^(doubao-|ep-)/i.test(id) ? id : ARK_MODEL[id] ?? id);
 
 export class VolcengineProvider implements VideoProvider {
   readonly name = 'volcengine';
   readonly capabilities: Capability[] = ['text-to-video', 'image-to-video', 'text-to-image', 'video-enhance'];
 
-  async createTask(input: GenerateInput, env: Env): Promise<ProviderTask | null> {
-    const key = env.VOLC_ARK_API_KEY;
-    if (!key) return null; // no credential → simulate in the queue consumer
+  async createTask(input: GenerateInput, apiKey: string | null): Promise<ProviderTask | null> {
+    if (!apiKey) return null; // no credential → simulate in the queue consumer
 
     const content: unknown[] = [{ type: 'text', text: this.composePrompt(input.prompt) }];
     for (const url of input.references?.images ?? []) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
@@ -50,29 +55,35 @@ export class VolcengineProvider implements VideoProvider {
       content.push({ type: 'image_url', image_url: { url: id }, role: 'reference_image' });
     }
 
+    const p = input.params;
+    const body: Record<string, unknown> = {
+      model: arkModelId(input.modelId),
+      content,
+      generate_audio: !!p.generateAudio,
+      resolution: p.resolution ?? '480p',
+      ratio: p.ratio ?? 'adaptive',
+      duration: p.duration ?? 5,
+      watermark: p.watermark !== false,
+    };
+    if (p.webSearch) body.tools = [{ type: 'web_search' }];
+    console.log('[ark] create', JSON.stringify({ model: body.model, resolution: body.resolution, ratio: body.ratio, duration: body.duration, generate_audio: body.generate_audio, watermark: body.watermark, refImages: input.references?.images?.length ?? 0, refVideos: input.references?.videos?.length ?? 0, refAudios: input.references?.audios?.length ?? 0, charAsset: !!input.references?.characterAssetId, promptChars: (content[0] as { text: string }).text.length }));
+
     const res = await fetch(`${ARK_BASE}/contents/generations/tasks`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: input.modelId,
-        content,
-        generate_audio: !!input.params.generateAudio,
-        ratio: input.params.ratio ?? 'adaptive',
-        duration: input.params.duration ?? 5,
-        watermark: input.params.watermark !== false,
-      }),
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`Ark create failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) { const t = await res.text(); console.error('[ark] create failed', res.status, t.slice(0, 500)); throw new Error(`Ark create ${res.status}: ${t.slice(0, 300)}`); }
     const data = (await res.json()) as { id: string };
+    console.log('[ark] created task', data.id);
     return { providerTaskId: data.id, state: 'queued', progress: 0 };
   }
 
-  async getTask(providerTaskId: string, env: Env): Promise<ProviderTask> {
-    const key = env.VOLC_ARK_API_KEY!;
+  async getTask(providerTaskId: string, apiKey: string): Promise<ProviderTask> {
     const res = await fetch(`${ARK_BASE}/contents/generations/tasks/${providerTaskId}`, {
-      headers: { Authorization: `Bearer ${key}` },
+      headers: { Authorization: `Bearer ${apiKey}` },
     });
-    if (!res.ok) throw new Error(`Ark get failed: ${res.status}`);
+    if (!res.ok) throw new Error(`Ark get ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const d = (await res.json()) as { status: string; content?: { video_url?: string }; error?: { message?: string } };
     const map: Record<string, ProviderState> = { queued: 'queued', running: 'running', succeeded: 'succeeded', failed: 'failed' };
     return {
@@ -84,10 +95,16 @@ export class VolcengineProvider implements VideoProvider {
     };
   }
 
+  // Structured prompt → 火山 tag format (matches seedance-app's combined prompt).
   private composePrompt(p: GenerateInput['prompt']): string {
-    return [p.visual, p.cameraPosition && `机位: ${p.cameraPosition}`, p.cameraMovement && `运镜: ${p.cameraMovement}`, p.soundEffects && `音效: ${p.soundEffects}`]
-      .filter(Boolean)
-      .join('，');
+    const parts: string[] = [];
+    if (p.visual?.trim()) parts.push(`<画面提示词>${p.visual.trim()}`);
+    if (p.dialogue?.trim()) parts.push(`<对话>${p.dialogue.trim()}`);
+    if (p.voiceover?.trim()) parts.push(`<旁白>${p.voiceover.trim()}`);
+    if (p.soundEffects?.trim()) parts.push(`<音效>${p.soundEffects.trim()}`);
+    if (p.cameraPosition?.trim()) parts.push(`<机位>${p.cameraPosition.trim()}`);
+    if (p.cameraMovement?.trim()) parts.push(`<运镜>${p.cameraMovement.trim()}`);
+    return parts.join('\n');
   }
 }
 

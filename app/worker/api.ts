@@ -5,9 +5,9 @@ import { eq, and, desc } from 'drizzle-orm';
 import { getDb, type Env } from './env';
 import * as S from './db/schema';
 import { seed, TEAM_ID } from './db/seed';
-import { audit, hold, ids } from './services';
+import { audit, hold, ids, providerKey, refund } from './services';
 import { registry, runBreakdown } from './providers';
-import { encryptSecret, decryptSecret, encKeyOf } from './crypto';
+import { encryptSecret, encKeyOf } from './crypto';
 import { ensureSchema } from './ensure-schema';
 import { models as MODELS } from '../src/lib/mock';
 import type { BreakdownResult } from '../src/lib/breakdown';
@@ -32,12 +32,7 @@ const sessionUser = async (c: { env: Env; req: { raw: Request } }) => {
   return (await c.env.SESSIONS.get(`sess:${sid}`)) ?? null;
 };
 
-/** Resolve a provider's API key: DB-stored (platform-configured, encrypted) first, then env secret. */
-async function credentialKey(env: Env, family: string): Promise<string | null> {
-  const row = await getDb(env).select().from(S.providerCredentials).where(and(eq(S.providerCredentials.teamId, TEAM_ID), eq(S.providerCredentials.family, family))).get();
-  if (row?.secretCiphertext) return decryptSecret(encKeyOf(env), row.secretCiphertext);
-  return null;
-}
+const credentialKey = (env: Env, family: string) => providerKey(getDb(env), TEAM_ID, env, family);
 
 /* ---------------- auth ---------------- */
 api.post('/api/auth/login', async (c) => {
@@ -263,13 +258,18 @@ api.post('/api/shots/generate', async (c) => {
   const ok = await hold(db, TEAM_ID, total, { type: 'generation_batch', id: shotIds.join(',') }, actor);
   if (!ok) return c.json({ error: '积分不足' }, 402);
   const per = Math.round(total / Math.max(1, shotIds.length));
+  // Ark key: platform-configured (火山 数据面) first, then env fallback. Null → simulate.
+  const arkKey = (await credentialKey(c.env, 'video')) ?? c.env.VOLC_ARK_API_KEY ?? null;
   let n = 8830;
+  const created: { id: string; shot: string; ptid: string; real: boolean }[] = [];
   for (const sid of shotIds) {
     const shot = await db.select().from(S.shots).where(eq(S.shots.id, sid)).get();
     if (!shot) continue;
     const cap = shot.refs?.images?.length || shot.keyframe ? 'image-to-video' : 'text-to-video';
     const taskId = `tk_${n++}`;
     let ptid = `cgt-${Math.random().toString(16).slice(2, 8)}`;
+    let real = false;
+    let taskError: string | null = null;
     // Per-shot references (each scene uploads its own) + first character asset for consistency.
     let charAsset: string | undefined;
     for (const cid of shot.chars ?? []) {
@@ -278,15 +278,21 @@ api.post('/api/shots/generate', async (c) => {
     }
     const references = { images: shot.refs?.images ?? [], videos: shot.refs?.videos ?? [], audios: shot.refs?.audios ?? [], characterAssetId: charAsset };
     try {
-      const pt = await registry.videoProvider()!.createTask({ modelId: model, capability: cap, prompt: shot.prompt, params: shot.params, references }, c.env);
-      if (pt) ptid = pt.providerTaskId;
-    } catch { /* fall back to simulation */ }
-    await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: 'e3', cap, model, provider: 'volcengine', ptid, state: 'queued', progress: 0, cost: per, by: actor, created: ids.now(), updated: ids.now() });
-    await db.update(S.shots).set({ status: 'queued', progress: 0, model, error: null, updated: ids.now() }).where(eq(S.shots.id, sid));
-    await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
-    await audit(db, TEAM_ID, { actor, action: 'shot.generate', target: `Shot #${pad2(shot.index)}`, diff: `提交 ${cap} · 预扣 ${per} 积分` });
+      const pt = await registry.videoProvider()!.createTask({ modelId: shot.model || model, capability: cap, prompt: shot.prompt, params: shot.params, references }, arkKey);
+      if (pt) { ptid = pt.providerTaskId; real = true; }
+    } catch (e) {
+      // Real Ark submission failed — surface it on the task instead of silently simulating.
+      if (arkKey) { taskError = String(e instanceof Error ? e.message : e); console.error('[shots/generate] Ark create failed', taskError); }
+    }
+    const initState = taskError ? 'failed' : 'queued';
+    await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: shot.scene, cap, model: shot.model || model, provider: 'volcengine', ptid, state: initState, progress: 0, cost: per, by: actor, error: taskError, created: ids.now(), updated: ids.now() });
+    await db.update(S.shots).set({ status: taskError ? 'failed' : 'queued', progress: 0, model: shot.model || model, error: taskError, updated: ids.now() }).where(eq(S.shots.id, sid));
+    if (taskError) { await refund(db, TEAM_ID, per, { type: 'generation_task', id: taskId }); }
+    else { await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID }); }
+    await audit(db, TEAM_ID, { actor, action: 'shot.generate', target: `Shot #${pad2(shot.index)}`, diff: `提交 ${cap} · ${real ? '火山 task ' + ptid : arkKey ? '失败' : '模拟'} · 预扣 ${per} 积分` });
+    created.push({ id: taskId, shot: sid, ptid, real });
   }
-  return c.json({ ok: true });
+  return c.json({ ok: true, mode: arkKey ? 'volcengine' : 'simulation', tasks: created });
 });
 
 api.post('/api/shots/:id/enhance', async (c) => {

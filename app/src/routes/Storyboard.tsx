@@ -9,8 +9,8 @@ import { Thumb, StatusPill, Avatar } from '@/ui/primitives';
 import { GenerationDrawer, EnhanceDrawer } from './drawers';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
-import { scenes, projects as pSeed, episodes as eSeed, shots as shotSeed, charOf } from '@/lib/mock';
-import type { PromptFields, Shot } from '@/lib/types';
+import { scenes as sceneSeed, projects as pSeed, episodes as eSeed, shots as shotSeed, charOf } from '@/lib/mock';
+import type { PromptFields, Scene, Shot } from '@/lib/types';
 
 const COLW = [34, 40, 92, 280, 172, 132, 124, 150, 96, 78, 44];
 
@@ -57,8 +57,10 @@ export function Storyboard() {
   const qc = useQueryClient();
   const { projectId, episodeId } = useParams({ strict: false }) as { projectId: string; episodeId: string };
   const { data: allShots = [] } = useQuery({ queryKey: ['shots'], queryFn: api.listShots, initialData: shotSeed, refetchInterval: 850 });
+  const { data: allScenes = sceneSeed } = useQuery({ queryKey: ['scenes'], queryFn: api.listScenes, initialData: sceneSeed });
   const p = pSeed.find((x) => x.id === projectId) || pSeed[0];
   const ep = eSeed.find((e) => e.id === episodeId) || eSeed[2];
+  const scenes = allScenes.filter((sc) => sc.episode === ep.id);
 
   const [view, setView] = useState('table');
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -149,7 +151,7 @@ export function Storyboard() {
 }
 
 function SceneRows({ sc, shots, sel, toggle, update, openGenerate, setEnhShot }: {
-  sc: (typeof scenes)[number]; shots: Shot[]; sel: Set<string>; toggle: (id: string) => void;
+  sc: Scene; shots: Shot[]; sel: Set<string>; toggle: (id: string) => void;
   update: (id: string, patch: Partial<Shot>) => void; openGenerate: (ids: string[]) => void; setEnhShot: (s: Shot) => void;
 }) {
   return (

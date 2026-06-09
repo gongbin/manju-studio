@@ -2,7 +2,8 @@
 // reachable (e.g. plain `vite dev` with no worker) it transparently falls back
 // to an in-memory store + polling simulation so the UI still works.
 import * as mock from './mock';
-import type { Asset, Character, Episode, GenerationTask, Member, Project, Role, Shot, ShotRefs, Wallet, Capability } from './types';
+import { heuristicBreakdown, type BreakdownResult } from './breakdown';
+import type { Asset, Character, Episode, GenerationTask, Invite, Member, Project, Role, Scene, Shot, ShotRefs, Wallet, Capability } from './types';
 
 const API = '/api';
 let useMock: boolean | null = null;
@@ -28,6 +29,8 @@ const store = {
   characters: mock.characters.map((c) => ({ ...c })) as Character[],
   assets: mock.assets.map((a) => ({ ...a })) as Asset[],
   members: mock.members.map((m) => ({ ...m })) as Member[],
+  invites: [] as Invite[],
+  scenes: mock.scenes.map((s) => ({ ...s })) as Scene[],
 };
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -40,6 +43,21 @@ export const api = {
   async listCharacters() { return remoteOrLocal(() => req<Character[]>('/characters'), () => clone(store.characters)); },
   async listAssets() { return remoteOrLocal(() => req<Asset[]>('/assets'), () => clone(store.assets)); },
   async listMembers() { return remoteOrLocal(() => req<Member[]>('/members'), () => clone(store.members)); },
+  async listScenes() { return remoteOrLocal(() => req<Scene[]>('/scenes'), () => clone(store.scenes)); },
+
+  async breakdown(input: { script: string; model: string; baseUrl: string; systemPrompt: string }): Promise<BreakdownResult> {
+    return remoteOrLocal(
+      () => req<BreakdownResult>('/breakdown', { method: 'POST', body: JSON.stringify(input) }),
+      () => heuristicBreakdown(input.script),
+    );
+  },
+
+  async applyBreakdown(episodeId: string, result: BreakdownResult): Promise<{ scenes: number; shots: number }> {
+    return remoteOrLocal(
+      () => req<{ scenes: number; shots: number }>('/breakdown/apply', { method: 'POST', body: JSON.stringify({ episodeId, result }) }),
+      () => localApplyBreakdown(episodeId, result),
+    );
+  },
   async listTasks() { return remoteOrLocal(() => req<GenerationTask[]>('/tasks'), () => clone(store.tasks)); },
   async getWallet() { return remoteOrLocal(() => req<Wallet>('/wallet'), () => clone(store.wallet)); },
 
@@ -122,14 +140,37 @@ export const api = {
     );
   },
 
-  async inviteMember(data: { email: string; role: Role; name?: string; title?: string }): Promise<string> {
+  async inviteMember(data: { email: string; role: Role; name?: string; title?: string }): Promise<{ id: string; token: string }> {
     return remoteOrLocal(
-      async () => (await req<{ id: string }>('/members', { method: 'POST', body: JSON.stringify(data) })).id,
+      () => req<{ id: string; token: string }>('/members', { method: 'POST', body: JSON.stringify(data) }),
       () => {
         const id = 'u_' + Math.random().toString(36).slice(2, 7);
+        const token = 'inv_' + Math.random().toString(36).slice(2, 12);
         const name = data.name?.trim() || data.email.split('@')[0];
         store.members = [...store.members, { id, name, email: data.email, role: data.role, title: data.title || '受邀成员', online: false, status: 'invited', projectRoles: {} }];
-        return id;
+        store.invites = [{ token, email: data.email, role: data.role, inviterId: mock.me.id, teamName: mock.team.name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 6 * 864e5).toISOString(), accepted: false }, ...store.invites];
+        return { id, token };
+      },
+    );
+  },
+
+  async getInvite(token: string): Promise<Invite | null> {
+    return remoteOrLocal(
+      () => req<Invite | null>(`/invites/${token}`),
+      () => clone(store.invites.find((i) => i.token === token) ?? null),
+    );
+  },
+
+  async acceptInvite(token: string, data: { name?: string }) {
+    return remoteOrLocal(
+      () => req(`/invites/${token}/accept`, { method: 'POST', body: JSON.stringify(data) }),
+      () => {
+        const inv = store.invites.find((i) => i.token === token);
+        if (inv) {
+          inv.accepted = true;
+          store.members = store.members.map((m) => (m.email === inv.email ? { ...m, status: 'active', name: data.name?.trim() || m.name } : m));
+        }
+        return { ok: true };
       },
     );
   },
@@ -191,6 +232,34 @@ export const api = {
 };
 
 // ---- fallback mutations ----
+const TONES = ['b', 'a', 'c', 'd'] as const;
+function localApplyBreakdown(episodeId: string, result: BreakdownResult): { scenes: number; shots: number } {
+  const nameToId = (name: string) => store.characters.find((c) => c.name === name)?.id ?? name;
+  const rid = () => Math.random().toString(36).slice(2, 8);
+  const oldScenes = new Set(store.scenes.filter((s) => s.episode === episodeId).map((s) => s.id));
+  store.shots = store.shots.filter((s) => !oldScenes.has(s.scene));
+  store.scenes = store.scenes.filter((s) => s.episode !== episodeId);
+  const newScenes: Scene[] = [];
+  const newShots: Shot[] = [];
+  let idx = 1;
+  result.scenes.forEach((sc, si) => {
+    const sceneId = `sc_${rid()}`;
+    const chars = sc.characters.map(nameToId);
+    newScenes.push({ id: sceneId, episode: episodeId, title: sc.title, loc: sc.loc, mood: sc.mood, time: sc.time, chars });
+    sc.shots.forEach((sh) => {
+      newShots.push({
+        id: `sh_${rid()}`, scene: sceneId, index: idx++, status: 'draft', model: 'seedance-2.0', chars, keyframe: false, assignee: null, tone: TONES[si % 4],
+        prompt: { visual: sh.visual, dialogue: sh.dialogue, voiceover: sh.voiceover, soundEffects: sh.soundEffects, cameraPosition: sh.cameraPosition, cameraMovement: sh.cameraMovement },
+        params: { resolution: '1080p', ratio: '16:9', duration: sh.duration, generateAudio: false, webSearch: false, watermark: false },
+      });
+    });
+  });
+  store.scenes = [...store.scenes, ...newScenes];
+  store.shots = [...store.shots, ...newShots];
+  store.episodes = store.episodes.map((e) => (e.id === episodeId ? { ...e, shots: newShots.length, done: 0 } : e));
+  return { scenes: newScenes.length, shots: newShots.length };
+}
+
 function localGenerate(ids: string[], params: { model: string }, total: number) {
   store.wallet.balance -= total;
   store.wallet.monthSpent += total;

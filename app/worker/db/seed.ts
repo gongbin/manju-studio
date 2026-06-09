@@ -14,7 +14,7 @@ export async function seed(db: DrizzleD1Database<typeof S>) {
   const now = new Date().toISOString();
 
   // wipe (order doesn't matter — no FKs enforced)
-  for (const t of [S.teams, S.users, S.memberships, S.projects, S.episodes, S.characters, S.scenes, S.shots, S.generationTasks, S.assets, S.creditWallets, S.creditTransactions, S.auditLogs, S.providerCredentials]) {
+  for (const t of [S.teams, S.users, S.memberships, S.projects, S.episodes, S.characters, S.scenes, S.shots, S.generationTasks, S.assets, S.creditWallets, S.creditTransactions, S.auditLogs, S.invites, S.providerCredentials]) {
     await db.delete(t);
   }
 

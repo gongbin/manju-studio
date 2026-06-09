@@ -50,4 +50,5 @@ crons = ["* * * * *"]
 SEED_KEY = "dev"            # 生产请改为强随机；用于 POST /api/_seed 保护
 # 机密用 `wrangler secret put` 注入，不要写进本文件：
 #   CREDENTIAL_ENC_KEY  —— 凭据 AES-GCM 加密密钥
-#   VOLC_ARK_API_KEY    —— （可选）火山方舟数据面 APIKey，配置后任务走真实生成
+#   VOLC_ARK_API_KEY    —— （可选）火山方舟数据面 APIKey，配置后视频任务走真实生成
+#   LLM_API_KEY         —— （可选）智能分镜 LLM 密钥（OpenAI 兼容端点，如 ZenMux）；未配置时分镜走本地启发式拆分

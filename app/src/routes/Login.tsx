@@ -1,25 +1,62 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Icon } from '@/ui/icon';
 import { Thumb } from '@/ui/primitives';
 import { api } from '@/lib/api';
+import { nameOf, ROLE_LABEL } from '@/lib/mock';
+import type { Invite } from '@/lib/types';
+
+const TONES = ['b', 'a', 'd', 'c', 'b', 'a'];
+const tokenFrom = (s: string) => { const t = s.trim(); const m = t.match(/[?&]invite=([^&\s]+)/); return m ? m[1] : t; };
 
 export function Login() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register' | 'invite'>('login');
   const [email, setEmail] = useState('linshen@qm.studio');
-  const [pw, setPw] = useState('••••••••••');
+  const [name, setName] = useState('');
+  const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const [invite, setInvite] = useState<Invite | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteErr, setInviteErr] = useState<string | null>(null);
+  const [loadingInvite, setLoadingInvite] = useState(false);
+
+  const loadInvite = async (tk: string) => {
+    if (!tk) return;
+    setLoadingInvite(true); setInviteErr(null);
+    try {
+      const inv = await api.getInvite(tk);
+      if (!inv) { setInviteErr('邀请无效或不存在'); setInvite(null); setToken(null); return; }
+      if (inv.accepted) { setInviteErr('该邀请已被接受，请直接登录'); setInvite(null); return; }
+      if (new Date(inv.expiresAt).getTime() < Date.now()) { setInviteErr('邀请链接已过期'); setInvite(null); return; }
+      setInvite(inv); setToken(tk); setEmail(inv.email);
+    } catch { setInviteErr('加载邀请失败，请稍后重试'); }
+    finally { setLoadingInvite(false); }
+  };
+
+  useEffect(() => {
+    const tk = new URLSearchParams(window.location.search).get('invite');
+    if (tk) { setMode('invite'); void loadInvite(tk); }
+  }, []);
+
   const enter = () => { void api.login(email); localStorage.setItem('ms.auth', '1'); navigate({ to: '/' }); };
-  const submit = (e: FormEvent) => { e.preventDefault(); setBusy(true); setTimeout(enter, 600); };
-  const tones = ['b', 'a', 'd', 'c', 'b', 'a'];
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    if (mode === 'invite' && token) { try { await api.acceptInvite(token, { name: name.trim() || undefined }); } catch { /* fall through */ } }
+    setTimeout(enter, 500);
+  };
+
+  const daysLeft = invite ? Math.max(0, Math.ceil((new Date(invite.expiresAt).getTime() - Date.now()) / 864e5)) : 0;
+  const showForm = mode !== 'invite' || !!invite;
 
   return (
-    <div style={{ height: '100%', display: 'grid', gridTemplateColumns: '1.05fr 1fr', background: 'var(--bg)' }}>
-      <div style={{ position: 'relative', overflow: 'hidden', borderRight: '1px solid var(--line)', background: 'radial-gradient(120% 100% at 0% 0%, color-mix(in oklab, var(--accent) 16%, var(--bg)), var(--bg) 60%)' }}>
+    <div className="login-split">
+      <div className="login-aside">
         <div style={{ position: 'absolute', inset: 0, opacity: 0.5, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridAutoRows: '1fr', gap: 12, padding: 40, transform: 'rotate(-8deg) scale(1.25)', transformOrigin: 'center' }}>
-          {tones.concat(tones).map((t, i) => <Thumb key={i} w="100%" h="100%" tone={t} label={'SHOT ' + String(i + 1).padStart(2, '0')} />)}
+          {TONES.concat(TONES).map((t, i) => <Thumb key={i} w="100%" h="100%" tone={t} label={'SHOT ' + String(i + 1).padStart(2, '0')} />)}
         </div>
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, transparent, color-mix(in oklab, var(--bg) 78%, transparent))' }} />
         <div style={{ position: 'absolute', left: 44, top: 40, right: 44 }}>
@@ -42,18 +79,34 @@ export function Login() {
         </div>
       </div>
 
-      <div className="center" style={{ padding: 24, overflow: 'auto' }}>
-        <div style={{ width: 'min(380px, 100%)' }} className="rise">
+      <div className="login-main">
+        <div className="rise" style={{ width: 'min(380px, 100%)' }}>
+          <div className="login-brand-m">
+            <div className="brand-mark" style={{ width: 34, height: 34 }}>漫</div>
+            <div><div style={{ fontWeight: 700, fontSize: 15 }}>漫剧工坊</div><div className="faint mono" style={{ fontSize: 10.5 }}>ManjuStudio</div></div>
+          </div>
+
           {mode === 'invite' ? (
-            <div className="card" style={{ padding: 18, marginBottom: 20, background: 'var(--accent-soft)', borderColor: 'var(--accent-line)' }}>
-              <div className="row gap10">
-                <span className="av" style={{ width: 34, height: 34, background: 'linear-gradient(140deg,#7c5cf0,#3b7ff0)' }}>青</span>
-                <div>
-                  <div style={{ fontWeight: 600 }}>周宴 邀请你加入 <b>青冥工作室</b></div>
-                  <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>预设角色 · <span className="acc">创作者 Creator</span> · 链接 6 天后过期</div>
+            invite ? (
+              <div className="card" style={{ padding: 16, marginBottom: 20, background: 'var(--accent-soft)', borderColor: 'var(--accent-line)' }}>
+                <div className="row gap10">
+                  <span className="av" style={{ width: 34, height: 34, background: 'linear-gradient(140deg,#7c5cf0,#3b7ff0)' }}>{invite.teamName.slice(0, 1)}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{nameOf(invite.inviterId)} 邀请你加入 <b>{invite.teamName}</b></div>
+                    <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>预设角色 · <span className="acc">{ROLE_LABEL[invite.role]}</span> · {daysLeft > 0 ? `链接 ${daysLeft} 天后过期` : '今日过期'}</div>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ marginBottom: 20 }} className="col gap14">
+                <div><h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-.01em' }}>接受邀请</h2><p className="muted" style={{ marginTop: 5, fontSize: 13.5 }}>粘贴你收到的邀请链接或邀请码以加入工作空间</p></div>
+                <div className="row gap8">
+                  <div className="search" style={{ height: 38, flex: 1 }}><Icon name="link" size={16} className="faint" /><input value={inviteInput} onChange={(e) => setInviteInput(e.target.value)} placeholder="粘贴邀请链接 / 邀请码" onKeyDown={(e) => e.key === 'Enter' && loadInvite(tokenFrom(inviteInput))} /></div>
+                  <button className="btn btn-soft" style={{ flexShrink: 0 }} disabled={!inviteInput.trim() || loadingInvite} onClick={() => loadInvite(tokenFrom(inviteInput))}>{loadingInvite ? <Icon name="refresh" size={15} className="spin" /> : '加载'}</button>
+                </div>
+                {inviteErr && <div className="row gap6" style={{ fontSize: 12.5, color: 'var(--st-failed)' }}><Icon name="warn" size={14} />{inviteErr}</div>}
+              </div>
+            )
           ) : (
             <div style={{ marginBottom: 22 }}>
               <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-.01em' }}>{mode === 'login' ? '欢迎回来' : '创建账户'}</h2>
@@ -61,32 +114,40 @@ export function Login() {
             </div>
           )}
 
-          <form onSubmit={submit} className="col gap16">
-            {(mode === 'register' || mode === 'invite') && (
-              <label><span className="lbl">昵称</span><input className="field" placeholder="你的名字" /></label>
-            )}
-            <label><span className="lbl">邮箱</span>
-              <div className="search" style={{ height: 38 }}><Icon name="mail" size={16} className="faint" /><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@studio.com" type="email" /></div>
-            </label>
-            <label><span className="lbl">密码</span>
-              <div className="search" style={{ height: 38 }}><Icon name="lock" size={16} className="faint" /><input value={pw} onChange={(e) => setPw(e.target.value)} type="password" />{mode === 'login' && <a className="acc" style={{ fontSize: 12, fontWeight: 600 }}>忘记？</a>}</div>
-            </label>
-            <button className="btn btn-pri" type="submit" style={{ height: 40, marginTop: 2 }} disabled={busy}>
-              {busy ? <Icon name="refresh" size={16} className="spin" /> : <Icon name={mode === 'invite' ? 'check' : 'arrowRight'} size={16} />}
-              {busy ? '正在进入…' : mode === 'login' ? '登录' : mode === 'invite' ? '接受邀请并加入' : '注册账户'}
-            </button>
-          </form>
+          {showForm && (
+            <form onSubmit={submit} className="col gap16">
+              {(mode === 'register' || (mode === 'invite' && invite)) && (
+                <label><span className="lbl">昵称</span><input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="你的名字" /></label>
+              )}
+              <label><span className="lbl">邮箱</span>
+                <div className="search" style={{ height: 38 }}><Icon name="mail" size={16} className="faint" /><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@studio.com" type="email" readOnly={mode === 'invite'} /></div>
+              </label>
+              <label><span className="lbl">{mode === 'invite' ? '设置登录密码' : '密码'}</span>
+                <div className="search" style={{ height: 38 }}><Icon name="lock" size={16} className="faint" /><input value={pw} onChange={(e) => setPw(e.target.value)} type="password" placeholder={mode === 'invite' ? '为账户设置密码' : ''} />{mode === 'login' && <a className="acc" style={{ fontSize: 12, fontWeight: 600 }}>忘记？</a>}</div>
+              </label>
+              <button className="btn btn-pri" type="submit" style={{ height: 40, marginTop: 2 }} disabled={busy}>
+                {busy ? <Icon name="refresh" size={16} className="spin" /> : <Icon name={mode === 'invite' ? 'check' : 'arrowRight'} size={16} />}
+                {busy ? '正在进入…' : mode === 'login' ? '登录' : mode === 'invite' ? '接受邀请并加入' : '注册账户'}
+              </button>
+            </form>
+          )}
 
-          <div className="row gap12" style={{ margin: '18px 0', color: 'var(--text-3)', fontSize: 12 }}>
-            <span className="hr grow" />或<span className="hr grow" />
-          </div>
-          <button className="btn btn-ghost" style={{ width: '100%', height: 38 }} onClick={enter}><Icon name="github" size={16} /> 使用 GitHub 继续</button>
+          {mode !== 'invite' && (
+            <>
+              <div className="row gap12" style={{ margin: '18px 0', color: 'var(--text-3)', fontSize: 12 }}>
+                <span className="hr grow" />或<span className="hr grow" />
+              </div>
+              <button className="btn btn-ghost" style={{ width: '100%', height: 38 }} onClick={enter}><Icon name="github" size={16} /> 使用 GitHub 继续</button>
+            </>
+          )}
 
           <div className="muted" style={{ textAlign: 'center', marginTop: 22, fontSize: 13 }}>
             {mode === 'login' ? (
               <>还没有账户？<a className="acc" style={{ fontWeight: 600 }} onClick={() => setMode('register')}> 立即注册</a><span className="faint"> · </span><a className="acc" style={{ fontWeight: 600 }} onClick={() => setMode('invite')}>有邀请链接</a></>
-            ) : (
+            ) : mode === 'register' ? (
               <>已有账户？<a className="acc" style={{ fontWeight: 600 }} onClick={() => setMode('login')}> 去登录</a></>
+            ) : (
+              <>不是受邀用户？<a className="acc" style={{ fontWeight: 600 }} onClick={() => { setMode('login'); setInvite(null); setInviteErr(null); }}> 去登录</a></>
             )}
           </div>
         </div>

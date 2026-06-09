@@ -306,44 +306,76 @@ function InviteMemberModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [role, setRole] = useState<Role>('creator');
-  const reset = () => { setEmail(''); setName(''); setTitle(''); setRole('creator'); };
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const reset = () => { setEmail(''); setName(''); setTitle(''); setRole('creator'); setLink(null); setCopied(false); };
+  const close = () => { onClose(); setTimeout(reset, 200); };
   const valid = /.+@.+\..+/.test(email.trim());
   const submit = async () => {
     if (!valid) return;
-    await api.inviteMember({ email: email.trim(), role, name: name.trim() || undefined, title: title.trim() || undefined });
+    const { token } = await api.inviteMember({ email: email.trim(), role, name: name.trim() || undefined, title: title.trim() || undefined });
     qc.invalidateQueries({ queryKey: ['members'] });
-    toast('已发送邀请 · ' + email.trim(), 'mail');
-    reset();
-    onClose();
+    setLink(`${location.origin}/login?invite=${token}`);
+    toast('已创建邀请 · ' + email.trim(), 'mail');
+  };
+  const copy = async () => {
+    if (!link) return;
+    try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1800); toast('邀请链接已复制', 'copy'); }
+    catch { toast('复制失败，请手动选择', 'warn'); }
   };
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={close}>
       <div style={{ width: 'min(480px, 94vw)' }}>
         <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
-          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="mail" size={17} /></span>
-          <div className="grow"><b style={{ fontSize: 15 }}>邀请成员</b><div className="faint" style={{ fontSize: 12 }}>通过邮箱邀请加入工作空间并分配角色</div></div>
-          <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name={link ? 'link' : 'mail'} size={17} /></span>
+          <div className="grow"><b style={{ fontSize: 15 }}>{link ? '邀请已创建' : '邀请成员'}</b><div className="faint" style={{ fontSize: 12 }}>{link ? '把链接发给对方，对方打开即可接受邀请' : '通过邮箱邀请加入工作空间并分配角色'}</div></div>
+          <button className="icon-btn" onClick={close}><Icon name="x" size={18} /></button>
         </div>
-        <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap16">
-          <label><span className="lbl">邮箱 <span style={{ color: 'var(--st-failed)' }}>*</span></span><input className="field" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@team.studio" onKeyDown={(e) => e.key === 'Enter' && submit()} /></label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <label><span className="lbl">显示名称</span><input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="可选" /></label>
-            <label><span className="lbl">头衔 / 职责</span><input className="field" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="可选" /></label>
+        {link ? (
+          <div style={{ padding: 18 }} className="col gap14">
+            <div className="row gap10" style={{ padding: '10px 12px', background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 10 }}>
+              <Icon name="mail" size={16} className="acc" />
+              <div className="grow" style={{ minWidth: 0 }}><b style={{ fontSize: 13 }}>{email.trim()}</b><div className="faint" style={{ fontSize: 11.5 }}>预设角色 {ROLE_LABEL[role]} · 链接 6 天后过期</div></div>
+            </div>
+            <div><div className="lbl">邀请链接</div>
+              <div className="row gap8">
+                <input className="field mono" readOnly value={link} onFocus={(e) => e.currentTarget.select()} style={{ fontSize: 11.5 }} />
+                <button className="btn btn-pri" style={{ flexShrink: 0 }} onClick={copy}><Icon name={copied ? 'check' : 'copy'} size={15} />{copied ? '已复制' : '复制'}</button>
+              </div>
+            </div>
+            <div className="faint" style={{ fontSize: 11.5 }}>对方在登录页打开此链接即可看到邀请详情并接受加入。成员已以「待接受」状态出现在列表中。</div>
           </div>
-          <div><div className="lbl">工作空间角色</div>
-            <div className="col gap6">
-              {ROLE_OPTS.filter((r) => r !== 'owner').map((r) => (
-                <div key={r} onClick={() => setRole(r)} className="row gap10" style={{ cursor: 'pointer', padding: '8px 11px', borderRadius: 9, border: '1px solid ' + (role === r ? 'var(--accent-line)' : 'var(--line-2)'), background: role === r ? 'var(--accent-soft)' : 'transparent' }}>
-                  <span className="center" style={{ width: 16, height: 16, borderRadius: '50%', flex: '0 0 auto', border: '2px solid ' + (role === r ? 'var(--accent)' : 'var(--line-3)') }}>{role === r && <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />}</span>
-                  <div className="grow"><b style={{ fontSize: 13 }}>{ROLE_LABEL[r]}</b><div className="faint" style={{ fontSize: 11 }}>{ROLE_DESC[r]}</div></div>
-                </div>
-              ))}
+        ) : (
+          <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap16">
+            <label><span className="lbl">邮箱 <span style={{ color: 'var(--st-failed)' }}>*</span></span><input className="field" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@team.studio" onKeyDown={(e) => e.key === 'Enter' && submit()} /></label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <label><span className="lbl">显示名称</span><input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="可选" /></label>
+              <label><span className="lbl">头衔 / 职责</span><input className="field" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="可选" /></label>
+            </div>
+            <div><div className="lbl">工作空间角色</div>
+              <div className="col gap6">
+                {ROLE_OPTS.filter((r) => r !== 'owner').map((r) => (
+                  <div key={r} onClick={() => setRole(r)} className="row gap10" style={{ cursor: 'pointer', padding: '8px 11px', borderRadius: 9, border: '1px solid ' + (role === r ? 'var(--accent-line)' : 'var(--line-2)'), background: role === r ? 'var(--accent-soft)' : 'transparent' }}>
+                    <span className="center" style={{ width: 16, height: 16, borderRadius: '50%', flex: '0 0 auto', border: '2px solid ' + (role === r ? 'var(--accent)' : 'var(--line-3)') }}>{role === r && <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />}</span>
+                    <div className="grow"><b style={{ fontSize: 13 }}>{ROLE_LABEL[r]}</b><div className="faint" style={{ fontSize: 11 }}>{ROLE_DESC[r]}</div></div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
         <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
-          <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-          <button className="btn btn-pri grow" disabled={!valid} onClick={submit}><Icon name="mail" size={15} />发送邀请</button>
+          {link ? (
+            <>
+              <button className="btn btn-ghost grow" onClick={reset}><Icon name="plus" size={15} />再邀请一位</button>
+              <button className="btn btn-pri grow" onClick={close}><Icon name="check" size={15} />完成</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-ghost grow" onClick={close}>取消</button>
+              <button className="btn btn-pri grow" disabled={!valid} onClick={submit}><Icon name="link" size={15} />生成邀请链接</button>
+            </>
+          )}
         </div>
       </div>
     </Modal>

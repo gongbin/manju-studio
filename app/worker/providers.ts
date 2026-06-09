@@ -2,6 +2,7 @@
 // families. VolcengineProvider is the first video implementation; new vendors
 // implement the same interface and self-register — business code is untouched.
 import type { Env } from './env';
+import { breakdownMessages, heuristicBreakdown, normalizeBreakdown, parseJsonLoose, type BreakdownResult } from '../src/lib/breakdown';
 
 export type Capability = 'text-to-video' | 'image-to-video' | 'text-to-image' | 'video-enhance' | 'text-to-speech';
 export type ProviderState = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -88,6 +89,40 @@ export class VolcengineProvider implements VideoProvider {
       .filter(Boolean)
       .join('，');
   }
+}
+
+/* ---------------- LLM provider (OpenAI-compatible, e.g. ZenMux) ---------------- */
+const llmKey = (env: Env) => env.LLM_API_KEY || env.ZENMUX_API_KEY;
+
+/** One-shot chat completion against any OpenAI-compatible endpoint (ZenMux 默认). */
+export async function llmChat(env: Env, opts: { baseUrl: string; model: string; messages: { role: string; content: string }[]; jsonMode?: boolean }): Promise<string> {
+  const key = llmKey(env);
+  if (!key) throw new Error('no LLM key');
+  const base = (opts.baseUrl || 'https://zenmux.ai/api/v1').replace(/\/$/, '');
+  const body: Record<string, unknown> = { model: opts.model, messages: opts.messages, temperature: 0.7 };
+  if (opts.jsonMode) body.response_format = { type: 'json_object' };
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+/** 智能分镜: call the LLM when a key is configured, else fall back to the heuristic split. */
+export async function runBreakdown(env: Env, input: { script: string; model: string; baseUrl: string; systemPrompt: string }): Promise<BreakdownResult> {
+  if (!llmKey(env)) return heuristicBreakdown(input.script);
+  const messages = breakdownMessages(input.systemPrompt, input.script);
+  let content: string;
+  try {
+    content = await llmChat(env, { baseUrl: input.baseUrl, model: input.model, messages, jsonMode: true });
+  } catch {
+    // Some models/endpoints reject response_format — retry plain. Real errors here surface to the caller.
+    content = await llmChat(env, { baseUrl: input.baseUrl, model: input.model, messages });
+  }
+  return normalizeBreakdown(parseJsonLoose(content));
 }
 
 class Registry {

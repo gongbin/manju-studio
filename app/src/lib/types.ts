@@ -20,6 +20,17 @@ export interface Member {
   projectRoles?: Record<string, Role>;
 }
 
+export interface Invite {
+  token: string;
+  email: string;
+  role: Role;
+  inviterId: string;
+  teamName: string;
+  createdAt: string;
+  expiresAt: string;
+  accepted: boolean;
+}
+
 export interface Wallet {
   balance: number;
   monthSpent: number;
@@ -66,6 +77,7 @@ export interface Episode {
 
 export interface Scene {
   id: string;
+  episode?: string;
   title: string;
   loc: string;
   mood: string;

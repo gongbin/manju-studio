@@ -3,6 +3,7 @@
 // localStorage (demo); the same shape can be promoted to a D1 settings table.
 // Pricing rules drive 计费: 火山 Seedance ≈ ¥1/s @1080p, scaled by resolution.
 import { useSyncExternalStore } from 'react';
+import { DEFAULT_BREAKDOWN_PROMPT } from './breakdown';
 
 export interface PricingRule {
   yuanPerSecond: number;            // 基准单价：参考分辨率(1080p)下 ¥/秒
@@ -32,11 +33,16 @@ export interface ProviderConfig {
   baseUrl: string;
   model: string;
 }
+export interface BreakdownSettings {
+  systemPrompt: string;
+  model: string;
+}
 export interface Settings {
   general: GeneralSettings;
   defaults: GenDefaults;
   storage: StorageSettings;
   providers: { llm: ProviderConfig; tts: ProviderConfig };
+  breakdown: BreakdownSettings;
   creditsPerYuan: number;           // 100 → 1 积分 = ¥0.01
   pricing: Record<string, PricingRule>;
 }
@@ -55,9 +61,10 @@ const DEFAULTS: Settings = {
   defaults: { model: 'seedance-2.0', resolution: '480p', ratio: 'adaptive', duration: 'smart', generateAudio: true, watermark: true },
   storage: { backend: 'r2', tosBucket: 'manju-assets', tosRegion: 'cn-beijing' },
   providers: {
-    llm: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
+    llm: { baseUrl: 'https://zenmux.ai/api/v1', model: 'anthropic/claude-sonnet-4' },
     tts: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1' },
   },
+  breakdown: { systemPrompt: DEFAULT_BREAKDOWN_PROMPT, model: 'anthropic/claude-sonnet-4' },
   creditsPerYuan: 100,
   pricing: defaultPricing(),
 };
@@ -76,6 +83,7 @@ function load(): Settings {
       defaults: { ...DEFAULTS.defaults, ...p.defaults },
       storage: { ...DEFAULTS.storage, ...p.storage },
       providers: { llm: { ...DEFAULTS.providers.llm, ...p.providers?.llm }, tts: { ...DEFAULTS.providers.tts, ...p.providers?.tts } },
+      breakdown: { ...DEFAULTS.breakdown, ...p.breakdown },
       pricing: { ...defaultPricing(), ...(p.pricing ?? {}) },
     };
   } catch { return clone(DEFAULTS); }
@@ -96,6 +104,7 @@ export const settingsStore = {
   setDefaults: (patch: Partial<GenDefaults>) => commit({ ...state, defaults: { ...state.defaults, ...patch } }),
   setStorage: (patch: Partial<StorageSettings>) => commit({ ...state, storage: { ...state.storage, ...patch } }),
   setProvider: (key: ProviderKey, patch: Partial<ProviderConfig>) => commit({ ...state, providers: { ...state.providers, [key]: { ...state.providers[key], ...patch } } }),
+  setBreakdown: (patch: Partial<BreakdownSettings>) => commit({ ...state, breakdown: { ...state.breakdown, ...patch } }),
   setCreditsPerYuan: (n: number) => commit({ ...state, creditsPerYuan: Math.max(1, n || 1) }),
   setRule: (modelId: string, patch: Partial<PricingRule>) => commit({ ...state, pricing: { ...state.pricing, [modelId]: { ...ruleFor(state, modelId), ...patch } } }),
   setResMult: (modelId: string, res: string, mult: number) => {

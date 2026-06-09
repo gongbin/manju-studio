@@ -13,5 +13,5 @@
     "esModuleInterop": true,
     "jsx": "react-jsx"
   },
-  "include": ["./**/*.ts", "../src/lib/mock.ts", "../src/lib/types.ts"]
+  "include": ["./**/*.ts", "../src/lib/mock.ts", "../src/lib/types.ts", "../src/lib/breakdown.ts"]
 }

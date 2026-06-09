@@ -51,6 +51,8 @@ npx wrangler queues create manju-tasks
 openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENC_KEY
 # 可选：接真实生成
 echo -n "你的火山方舟APIKey" | npx wrangler secret put VOLC_ARK_API_KEY
+# 可选：智能分镜接 LLM（OpenAI 兼容端点，如 ZenMux https://zenmux.ai/api/v1）
+echo -n "你的ZenMux/LLM_APIKey" | npx wrangler secret put LLM_API_KEY
 
 npm run cf:build
 npm run db:migrate                        # wrangler d1 migrations apply manju-db --remote

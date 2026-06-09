@@ -178,6 +178,18 @@ export const auditLogs = sqliteTable('audit_logs', {
   time: text('time').notNull(),
 });
 
+export const invites = sqliteTable('invites', {
+  token: text('token').primaryKey(),
+  teamId: text('team_id').notNull(),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  inviterId: text('inviter_id'),
+  teamName: text('team_name'),
+  createdAt: text('created_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  accepted: integer('accepted', { mode: 'boolean' }).notNull().default(false),
+});
+
 export const providerCredentials = sqliteTable('provider_credentials', {
   id: text('id').primaryKey(),
   teamId: text('team_id').notNull(),

@@ -73,9 +73,9 @@ export const scriptContent = `# 第三集 · 雨夜入城
 燕三娘（低语）：沈家的人……终于回来了。`;
 
 export const scenes: Scene[] = [
-  { id: 's1', title: '场一 · 城门外', loc: '青冥城·城门', mood: '压抑 / 肃杀', time: '夜·雨', chars: ['c_shen', 'c_lao'] },
-  { id: 's2', title: '场二 · 长街', loc: '青冥城·长街', mood: '诡谲 / 孤寂', time: '夜·雨', chars: ['c_shen', 'c_su'] },
-  { id: 's3', title: '场三 · 客栈', loc: '青冥城·客栈二楼', mood: '隐秘 / 复杂', time: '夜', chars: ['c_yan'] },
+  { id: 's1', episode: 'e3', title: '场一 · 城门外', loc: '青冥城·城门', mood: '压抑 / 肃杀', time: '夜·雨', chars: ['c_shen', 'c_lao'] },
+  { id: 's2', episode: 'e3', title: '场二 · 长街', loc: '青冥城·长街', mood: '诡谲 / 孤寂', time: '夜·雨', chars: ['c_shen', 'c_su'] },
+  { id: 's3', episode: 'e3', title: '场三 · 客栈', loc: '青冥城·客栈二楼', mood: '隐秘 / 复杂', time: '夜', chars: ['c_yan'] },
 ];
 
 const mkPrompt = (o: Partial<PromptFields>): PromptFields => ({ visual: '', dialogue: '', voiceover: '', soundEffects: '', cameraPosition: '', cameraMovement: '', ...o });

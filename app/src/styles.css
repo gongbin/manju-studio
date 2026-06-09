@@ -295,3 +295,22 @@ textarea.field { height: auto; padding: 9px 11px; resize: vertical; line-height:
   .toast { justify-content: center; }
   .seg button { padding: 0 8px; }
 }
+
+/* ---------- login / register ---------- */
+.login-split { height: 100%; display: grid; grid-template-columns: 1.05fr 1fr; background: var(--bg); }
+.login-aside { position: relative; overflow: hidden; border-right: 1px solid var(--line); background: radial-gradient(120% 100% at 0% 0%, color-mix(in oklab, var(--accent) 16%, var(--bg)), var(--bg) 60%); }
+.login-main { display: grid; place-items: center; padding: 24px; overflow: auto; }
+.login-brand-m { display: none; align-items: center; gap: 10px; margin-bottom: 22px; }
+
+@media (max-width: 860px) {
+  .login-split { grid-template-columns: 1fr; }
+  .login-aside { display: none; }
+  .login-brand-m { display: flex; }
+  .login-main { align-items: start; padding: 24px 18px max(24px, env(safe-area-inset-bottom)); padding-top: 7vh; }
+}
+
+/* ---------- script / breakdown split ---------- */
+@media (max-width: 760px) {
+  .sb-split { grid-template-columns: 1fr !important; grid-template-rows: minmax(200px, 42%) 1fr; }
+  .sb-split > div:first-child { border-right: none !important; border-bottom: 1px solid var(--line); }
+}

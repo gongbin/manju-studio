@@ -1,42 +1,94 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
+import { Modal } from '@/ui/dialog';
 import { StatusPill } from '@/ui/primitives';
+import { toast } from '@/ui/toast';
 import { EP_STATUS } from '@/lib/status';
 import { fmt } from '@/lib/format';
-import { projects as pSeed, episodes as eSeed, scenes, shots, scriptContent, nameOf, charOf } from '@/lib/mock';
+import { projects as pSeed, episodes as eSeed, scriptContent, nameOf } from '@/lib/mock';
+import { api } from '@/lib/api';
+import { useSettings, settingsStore } from '@/lib/settings';
+import { DEFAULT_BREAKDOWN_PROMPT, type BreakdownResult } from '@/lib/breakdown';
 
-const LLMS = [
-  { id: 'doubao', label: '火山 · 豆包 Pro', sub: 'volcengine' },
-  { id: 'claude', label: 'Claude Sonnet', sub: 'anthropic' },
-  { id: 'gpt', label: 'GPT-4o', sub: 'openai' },
-  { id: 'local', label: '自建 · OpenAI 兼容端点', sub: 'custom' },
-];
-const GEN_STEPS = ['解析剧本结构', '拆分场次 Scene', '生成镜头草稿 Shot', '扩写画面提示词', '映射出场角色'];
+// Curated ZenMux (OpenAI-compatible) model ids — vendor/model. Editable via 自定义.
+const MODELS = ['anthropic/claude-sonnet-4', 'anthropic/claude-opus-4', 'openai/gpt-5', 'openai/gpt-4o', 'openai/gpt-4o-mini', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'];
+
+function PromptModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const s = useSettings();
+  const [val, setVal] = useState(s.breakdown.systemPrompt);
+  const save = () => { settingsStore.setBreakdown({ systemPrompt: val.trim() || DEFAULT_BREAKDOWN_PROMPT }); toast('分镜提示词已保存', 'check'); onClose(); };
+  return (
+    <Modal open={open} onClose={onClose}>
+      <div style={{ width: 'min(640px, 94vw)' }}>
+        <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
+          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="wand" size={17} /></span>
+          <div className="grow"><b style={{ fontSize: 15 }}>分镜提示词设置</b><div className="faint" style={{ fontSize: 12 }}>控制如何把剧本拆成场次 / 镜头 / 结构化提示词（System Prompt）</div></div>
+          <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+        </div>
+        <div style={{ padding: 18 }} className="col gap12">
+          <textarea className="field mono" value={val} onChange={(e) => setVal(e.target.value)} spellCheck={false} style={{ minHeight: 320, lineHeight: 1.6, fontSize: 12.5, resize: 'vertical' }} />
+          <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '9px 11px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="info" size={15} className="acc" /><span>模型须返回严格 JSON（scenes → shots）。改坏了可「恢复默认」。运行时密钥在服务端，前端不持有。</span></div>
+        </div>
+        <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
+          <button className="btn btn-ghost" onClick={() => setVal(DEFAULT_BREAKDOWN_PROMPT)}><Icon name="retry" size={14} />恢复默认</button>
+          <span className="grow" />
+          <button className="btn btn-ghost" onClick={onClose}>取消</button>
+          <button className="btn btn-pri" onClick={save}><Icon name="check" size={15} />保存提示词</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 export function Script() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const s = useSettings();
+  const fileRef = useRef<HTMLInputElement>(null);
   const { projectId, episodeId } = useParams({ strict: false }) as { projectId: string; episodeId: string };
   const p = pSeed.find((x) => x.id === projectId) || pSeed[0];
   const ep = eSeed.find((e) => e.id === episodeId) || eSeed[2];
-  const hasBreakdown = ep.shots > 0 || episodeId === 'e3';
 
-  const [phase, setPhase] = useState<'idle' | 'gen' | 'done'>(hasBreakdown ? 'done' : 'idle');
-  const [llm, setLlm] = useState(LLMS[0]);
+  const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [text, setText] = useState(scriptContent);
-  const [genStep, setGenStep] = useState(0);
+  const [result, setResult] = useState<BreakdownResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
 
-  const shotsByScene = (sid: string) => shots.filter((s) => s.scene === sid);
-  const runBreakdown = () => {
-    setPhase('gen'); setGenStep(0);
-    let i = 0;
-    const t = setInterval(() => {
-      i++; setGenStep(i);
-      if (i >= GEN_STEPS.length) { clearInterval(t); setTimeout(() => setPhase('done'), 350); }
-    }, 520);
+  const model = s.breakdown.model;
+  const setModel = (m: string) => settingsStore.setBreakdown({ model: m });
+  const customModel = () => { const m = window.prompt('输入模型 ID（vendor/model）', model); if (m && m.trim()) setModel(m.trim()); };
+
+  const run = async () => {
+    if (!text.trim()) { toast('请先输入剧本文本', 'warn'); return; }
+    setPhase('running'); setErr(null);
+    try {
+      const r = await api.breakdown({ script: text, model, baseUrl: s.providers.llm.baseUrl, systemPrompt: s.breakdown.systemPrompt });
+      if (!r.scenes?.length) { setErr('未能解析出分镜结构，请检查剧本格式或调整提示词后重试。'); setPhase('error'); return; }
+      setResult(r); setPhase('done');
+    } catch (e) { setErr(String(e instanceof Error ? e.message : e)); setPhase('error'); }
   };
+  const apply = async () => {
+    if (!result) return;
+    setApplying(true);
+    try {
+      const out = await api.applyBreakdown(ep.id, result);
+      qc.invalidateQueries({ queryKey: ['scenes'] });
+      qc.invalidateQueries({ queryKey: ['shots'] });
+      qc.invalidateQueries({ queryKey: ['episodes'] });
+      toast(`已应用到分镜表 · ${out.scenes} 场 ${out.shots} 镜头`, 'check');
+      navigate({ to: '/project/$projectId/$episodeId/storyboard', params: { projectId: p.id, episodeId: ep.id } });
+    } catch (e) { toast('应用失败：' + (e instanceof Error ? e.message : e), 'warn'); setApplying(false); }
+  };
+  const paste = async () => { try { const t = await navigator.clipboard.readText(); if (t) { setText(t); toast('已粘贴剪贴板文本', 'paste'); } } catch { toast('无法读取剪贴板，请手动粘贴', 'warn'); } };
+  const importFile = (f?: File) => { if (!f) return; const r = new FileReader(); r.onload = () => { setText(String(r.result || '')); toast('已导入 ' + f.name, 'import'); }; r.readAsText(f); };
+
+  const totalShots = result?.scenes.reduce((a, sc) => a + sc.shots.length, 0) ?? 0;
 
   return (
     <Screen crumb={<Crumb parts={[{ label: '项目', to: '/' }, { label: p.name, to: '/project/$projectId', params: { projectId: p.id } }, { label: `EP${fmt.pad2(ep.index)} · ${ep.title}` }]} />}>
@@ -47,31 +99,38 @@ export function Script() {
             <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>v7 · {nameOf('u_qi')} 编辑于 {fmt.ago(ep.updated)}</div>
           </div>
           <div className="row gap8">
-            <button className="btn btn-ghost btn-sm"><Icon name="paste" size={14} />粘贴文本</button>
-            <button className="btn btn-ghost btn-sm"><Icon name="import" size={14} />导入 JSON / md</button>
+            <input ref={fileRef} type="file" accept=".txt,.md,.json,text/*" style={{ display: 'none' }} onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
+            <button className="btn btn-ghost btn-sm" onClick={paste}><Icon name="paste" size={14} />粘贴文本</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}><Icon name="import" size={14} />导入 txt / md / json</button>
           </div>
         </div>
 
         <div className="row gap8 wrap" style={{ padding: '10px 22px', fontSize: 12, color: 'var(--text-2)', background: 'var(--surface-2)', borderBottom: '1px solid var(--line)' }}>
           <Icon name="info" size={14} className="faint" />
-          剧本不绑定任何单一大模型：可在此手写、从外部 LLM 粘贴 / 导入，或用站内可插拔 LLM 一键分镜 —— 提示词字段永远可手动编辑。
+          剧本不绑定单一大模型：可手写、外部粘贴 / 导入，或用站内可插拔 LLM 一键分镜。提示词字段永远可手动编辑。
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+        <div className="sb-split" style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
           <div style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <div className="row gap6" style={{ padding: '8px 14px', borderBottom: '1px solid var(--line)' }}>
-              {['type', 'bolt', 'list', 'image', 'mic'].map((ic) => <button key={ic} className="icon-btn" style={{ width: 28, height: 28 }}><Icon name={ic} size={15} /></button>)}
+            <div className="row gap6" style={{ padding: '9px 16px', borderBottom: '1px solid var(--line)' }}>
+              <Icon name="doc" size={15} className="faint" /><b style={{ fontSize: 13 }}>剧本</b>
               <span className="grow" /><span className="faint mono" style={{ fontSize: 11 }}>Markdown · {text.length} 字</span>
             </div>
-            <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+            <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} placeholder="在此粘贴或编写剧本。建议用 ## 标记场次，「角色（情绪）：台词」标记对白…"
               style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', padding: '18px 22px', background: 'transparent', color: 'var(--text)', lineHeight: 1.85, fontSize: 14, fontFamily: '"Noto Sans SC", system-ui' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--surface-2)' }}>
-            <div className="row gap10" style={{ padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
+            <div className="row gap8 wrap" style={{ padding: '9px 16px', borderBottom: '1px solid var(--line)' }}>
               <Icon name="wand" size={16} className="acc" /><b style={{ fontSize: 13.5 }}>分场 / 分镜</b><span className="grow" />
-              <Menu align="end" trigger={<button className="btn btn-ghost btn-sm"><Icon name="cpu" size={13} />{llm.label}<Icon name="chevDown" size={13} /></button>}
-                items={LLMS.map((m) => ({ icon: m.id === llm.id ? 'check' : 'cpu', label: m.label, onClick: () => setLlm(m) }))} />
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowPrompt(true)}><Icon name="settings" size={13} />提示词</button>
+              <Menu align="end" trigger={<button className="btn btn-ghost btn-sm"><Icon name="cpu" size={13} /><span className="mono" style={{ fontSize: 11.5 }}>{model}</span><Icon name="chevDown" size={13} /></button>}
+                items={[
+                  ...MODELS.map((m) => ({ icon: m === model ? 'check' : 'cpu', label: m, onClick: () => setModel(m) })),
+                  ...(MODELS.includes(model) ? [] : [{ icon: 'check' as const, label: model, onClick: () => {} }]),
+                  { sep: true },
+                  { icon: 'edit', label: '自定义模型 ID…', onClick: customModel },
+                ]} />
             </div>
 
             <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
@@ -79,45 +138,54 @@ export function Script() {
                 <div className="center" style={{ height: '100%', textAlign: 'center', padding: 20 }}>
                   <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--accent-soft)', display: 'grid', placeItems: 'center', color: 'var(--accent-text)', marginBottom: 16 }}><Icon name="wand" size={26} /></div>
                   <div style={{ fontWeight: 700, fontSize: 16 }}>把剧本拆成镜头草稿</div>
-                  <div className="muted" style={{ fontSize: 13, maxWidth: 320, marginTop: 6 }}>用 <b>{llm.label}</b> 自动拆分场次、生成 Shot 草稿与结构化画面提示词。结果可逐项编辑，也可直接手填。</div>
-                  <button className="btn btn-pri" style={{ marginTop: 18 }} onClick={runBreakdown}><Icon name="sparkle" size={16} />智能分镜</button>
+                  <div className="muted" style={{ fontSize: 13, maxWidth: 340, marginTop: 6 }}>用 <span className="mono acc">{model}</span> 自动拆分场次、生成 Shot 草稿与结构化画面提示词。结果可逐项编辑，也可直接手填。</div>
+                  <button className="btn btn-pri" style={{ marginTop: 18 }} onClick={run}><Icon name="sparkle" size={16} />智能分镜</button>
+                  <div className="faint" style={{ fontSize: 11, marginTop: 12 }}>端点 <span className="mono">{s.providers.llm.baseUrl}</span> · 密钥在服务端 LLM_API_KEY；未配置时用本地启发式拆分</div>
                 </div>
               )}
 
-              {phase === 'gen' && (
-                <div className="col gap10" style={{ paddingTop: 8 }}>
-                  {GEN_STEPS.map((s, i) => (
-                    <div key={i} className="row gap10" style={{ fontSize: 13, opacity: i <= genStep ? 1 : 0.35, transition: 'opacity .3s' }}>
-                      <span className="center" style={{ width: 22, height: 22, borderRadius: '50%', background: i < genStep ? 'var(--st-done-bg)' : 'var(--surface-3)', color: i < genStep ? 'var(--st-done)' : 'var(--text-3)' }}>
-                        {i < genStep ? <Icon name="check" size={13} strokeWidth={3} /> : i === genStep ? <Icon name="refresh" size={13} className="spin" /> : <span className="mono" style={{ fontSize: 11 }}>{i + 1}</span>}
-                      </span>
-                      <span style={{ fontWeight: i === genStep ? 600 : 400 }}>{s}</span>
-                    </div>
-                  ))}
+              {phase === 'running' && (
+                <div className="center" style={{ height: '100%', textAlign: 'center', padding: 20 }}>
+                  <Icon name="refresh" size={30} className="spin acc" />
+                  <div style={{ fontWeight: 600, fontSize: 14.5, marginTop: 14 }}>正在用 {model} 拆分剧本…</div>
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 6, maxWidth: 320 }}>解析结构 → 切分场次 → 生成镜头草稿 → 扩写画面提示词。大模型推理可能需要十几秒。</div>
                 </div>
               )}
 
-              {phase === 'done' && (
+              {phase === 'error' && (
+                <div className="center" style={{ height: '100%', textAlign: 'center', padding: 20 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 14, background: 'var(--st-failed-bg)', display: 'grid', placeItems: 'center', color: 'var(--st-failed)', marginBottom: 14 }}><Icon name="warn" size={24} /></div>
+                  <div style={{ fontWeight: 600, fontSize: 14.5 }}>分镜失败</div>
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 6, maxWidth: 360, wordBreak: 'break-word' }}>{err}</div>
+                  <button className="btn btn-pri" style={{ marginTop: 16 }} onClick={run}><Icon name="retry" size={15} />重试</button>
+                </div>
+              )}
+
+              {phase === 'done' && result && (
                 <div className="col gap14">
-                  <div className="row gap8" style={{ fontSize: 12 }}>
-                    <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={12} />{scenes.length} 场 · {shots.length} 镜头</span>
-                    <span className="faint">由 {llm.label} 生成 · 可编辑</span>
+                  <div className="row gap8 wrap" style={{ fontSize: 12 }}>
+                    <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={12} />{result.scenes.length} 场 · {totalShots} 镜头</span>
+                    <span className="faint">由 <span className="mono">{model}</span> 生成 · 应用后可在分镜表逐项编辑</span>
                   </div>
-                  {scenes.map((sc) => (
-                    <div key={sc.id} className="card" style={{ overflow: 'hidden' }}>
+                  {result.scenes.map((sc, si) => (
+                    <div key={si} className="card" style={{ overflow: 'hidden' }}>
                       <div style={{ padding: '10px 12px', background: 'var(--surface-3)', borderBottom: '1px solid var(--line)' }}>
-                        <div className="row gap8"><b style={{ fontSize: 13 }}>{sc.title}</b><span className="grow" /><span className="faint mono" style={{ fontSize: 11 }}>{shotsByScene(sc.id).length} shot</span></div>
+                        <div className="row gap8"><b style={{ fontSize: 13 }}>{sc.title}</b><span className="grow" /><span className="faint mono" style={{ fontSize: 11 }}>{sc.shots.length} shot</span></div>
                         <div className="row gap10 wrap" style={{ marginTop: 5, fontSize: 11.5 }}>
-                          <span className="faint">📍 {sc.loc}</span><span className="faint">· {sc.time}</span><span className="faint">· {sc.mood}</span>
-                          <span className="row gap4">{sc.chars.map((c) => <span key={c} className="tag" style={{ height: 18, fontSize: 10.5 }}>{charOf(c)?.name || c}</span>)}</span>
+                          {sc.loc && <span className="faint">📍 {sc.loc}</span>}{sc.time && <span className="faint">· {sc.time}</span>}{sc.mood && <span className="faint">· {sc.mood}</span>}
+                          <span className="row gap4 wrap">{sc.characters.map((c, i) => <span key={i} className="tag" style={{ height: 18, fontSize: 10.5 }}>{c}</span>)}</span>
                         </div>
                       </div>
                       <div>
-                        {shotsByScene(sc.id).map((sh) => (
-                          <div key={sh.id} className="row gap10" style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)' }}>
-                            <span className="mono faint" style={{ fontSize: 11, flex: '0 0 26px' }}>#{fmt.pad2(sh.index)}</span>
-                            <span className="grow ellipsis" style={{ fontSize: 12.5 }}>{sh.prompt.visual}</span>
-                            <span className="tag" style={{ height: 18, fontSize: 10.5 }}>{sh.prompt.cameraPosition.split('·')[0]}</span>
+                        {sc.shots.map((sh, i) => (
+                          <div key={i} className="row gap10" style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', alignItems: 'flex-start' }}>
+                            <span className="mono faint" style={{ fontSize: 11, flex: '0 0 26px', paddingTop: 1 }}>#{fmt.pad2(i + 1)}</span>
+                            <div className="grow" style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12.5 }}>{sh.visual}</div>
+                              {sh.dialogue && <div className="acc" style={{ fontSize: 11.5, marginTop: 2 }}>「{sh.dialogue}」</div>}
+                              {sh.voiceover && <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>旁白：{sh.voiceover}</div>}
+                            </div>
+                            <span className="tag mono" style={{ height: 18, fontSize: 10, flexShrink: 0 }}>{sh.cameraPosition.split('·')[0] || '镜头'} · {sh.duration}s</span>
                           </div>
                         ))}
                       </div>
@@ -129,14 +197,15 @@ export function Script() {
 
             {phase === 'done' && (
               <div className="row gap8" style={{ padding: '12px 16px', borderTop: '1px solid var(--line)' }}>
-                <button className="btn btn-ghost btn-sm" onClick={runBreakdown}><Icon name="refresh" size={13} />重新生成</button>
+                <button className="btn btn-ghost btn-sm" onClick={run} disabled={applying}><Icon name="refresh" size={13} />重新生成</button>
                 <span className="grow" />
-                <button className="btn btn-pri" onClick={() => navigate({ to: '/project/$projectId/$episodeId/storyboard', params: { projectId: p.id, episodeId: ep.id } })}>应用到分镜表<Icon name="arrowRight" size={15} /></button>
+                <button className="btn btn-pri" onClick={apply} disabled={applying}>{applying ? <Icon name="refresh" size={15} className="spin" /> : <>应用到分镜表<Icon name="arrowRight" size={15} /></>}</button>
               </div>
             )}
           </div>
         </div>
       </div>
+      <PromptModal open={showPrompt} onClose={() => setShowPrompt(false)} />
     </Screen>
   );
 }

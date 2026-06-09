@@ -10,6 +10,9 @@ export interface Env {
   SEED_KEY: string;
   CREDENTIAL_ENC_KEY?: string;
   VOLC_ARK_API_KEY?: string;
+  /** LLM (智能分镜) data-plane key — e.g. a ZenMux key (OpenAI-compatible). */
+  LLM_API_KEY?: string;
+  ZENMUX_API_KEY?: string;
 }
 
 export interface TaskMessage {

@@ -6,8 +6,9 @@ import { getDb, type Env } from './env';
 import * as S from './db/schema';
 import { seed, TEAM_ID } from './db/seed';
 import { audit, hold, ids } from './services';
-import { registry } from './providers';
+import { registry, runBreakdown } from './providers';
 import { models as MODELS } from '../src/lib/mock';
+import type { BreakdownResult } from '../src/lib/breakdown';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -149,13 +150,39 @@ api.delete('/api/assets/:id', async (c) => {
 api.post('/api/members', async (c) => {
   const d = await c.req.json<{ email: string; role: string; name?: string; title?: string }>();
   const db = getDb(c.env);
+  const actor = (await sessionUser(c)) ?? 'u_lin';
   const existingUser = await db.select().from(S.users).where(eq(S.users.email, d.email)).get();
   const uid = existingUser?.id ?? 'u_' + Math.random().toString(36).slice(2, 7);
   if (!existingUser) await db.insert(S.users).values({ id: uid, email: d.email, name: d.name?.trim() || d.email.split('@')[0], role: d.role, title: d.title ?? '受邀成员', createdAt: ids.now() });
   const mem = await db.select().from(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid))).get();
   if (!mem) await db.insert(S.memberships).values({ id: `mem_${uid}`, teamId: TEAM_ID, userId: uid, role: d.role, status: 'invited', projectRoles: {} });
-  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.invite', target: d.email, diff: `邀请加入工作空间 · 角色 ${d.role}` });
-  return c.json({ id: uid });
+  const token = 'inv_' + Math.random().toString(36).slice(2, 12);
+  const tm = await db.select().from(S.teams).where(eq(S.teams.id, TEAM_ID)).get();
+  await db.insert(S.invites).values({ token, teamId: TEAM_ID, email: d.email, role: d.role, inviterId: actor, teamName: tm?.name ?? '工作空间', createdAt: ids.now(), expiresAt: new Date(Date.now() + 6 * 864e5).toISOString(), accepted: false });
+  await audit(db, TEAM_ID, { actor, action: 'member.invite', target: d.email, diff: `邀请加入工作空间 · 角色 ${d.role}` });
+  return c.json({ id: uid, token });
+});
+
+api.get('/api/invites/:token', async (c) => {
+  const inv = await getDb(c.env).select().from(S.invites).where(eq(S.invites.token, c.req.param('token'))).get();
+  if (!inv) return c.json(null);
+  return c.json({ token: inv.token, email: inv.email, role: inv.role, inviterId: inv.inviterId, teamName: inv.teamName, createdAt: inv.createdAt, expiresAt: inv.expiresAt, accepted: inv.accepted });
+});
+
+api.post('/api/invites/:token/accept', async (c) => {
+  const token = c.req.param('token');
+  const d = await c.req.json<{ name?: string }>().catch(() => ({} as { name?: string }));
+  const db = getDb(c.env);
+  const inv = await db.select().from(S.invites).where(eq(S.invites.token, token)).get();
+  if (!inv) return c.json({ error: 'not found' }, 404);
+  await db.update(S.invites).set({ accepted: true }).where(eq(S.invites.token, token));
+  const user = await db.select().from(S.users).where(eq(S.users.email, inv.email)).get();
+  if (user) {
+    if (d.name?.trim()) await db.update(S.users).set({ name: d.name.trim() }).where(eq(S.users.id, user.id));
+    await db.update(S.memberships).set({ status: 'active' }).where(and(eq(S.memberships.teamId, inv.teamId), eq(S.memberships.userId, user.id)));
+  }
+  await audit(db, inv.teamId, { actor: user?.id ?? inv.email, action: 'member.accept', target: inv.email, diff: '接受邀请加入工作空间' });
+  return c.json({ ok: true });
 });
 
 api.patch('/api/members/:id/project-role', async (c) => {
@@ -259,6 +286,50 @@ api.post('/api/shots/:id/enhance', async (c) => {
   await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
   await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · 预扣 ${cost}` });
   return c.json({ ok: true });
+});
+
+/* ---------------- 智能分镜 (LLM breakdown) ---------------- */
+api.post('/api/breakdown', async (c) => {
+  const input = await c.req.json<{ script: string; model: string; baseUrl: string; systemPrompt: string }>();
+  if (!input.script?.trim()) return c.json({ error: '剧本为空' }, 400);
+  try {
+    return c.json(await runBreakdown(c.env, input));
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+api.post('/api/breakdown/apply', async (c) => {
+  const { episodeId, result } = await c.req.json<{ episodeId: string; result: BreakdownResult }>();
+  const db = getDb(c.env);
+  const actor = (await sessionUser(c)) ?? 'u_lin';
+  const chars = await db.select().from(S.characters).where(eq(S.characters.teamId, TEAM_ID)).all();
+  const nameToId = (n: string) => chars.find((x) => x.name === n)?.id ?? n;
+  const tones = ['b', 'a', 'c', 'd'];
+  // replace this episode's scenes + their shots
+  const oldScenes = await db.select().from(S.scenes).where(and(eq(S.scenes.teamId, TEAM_ID), eq(S.scenes.episode, episodeId))).all();
+  for (const sc of oldScenes) await db.delete(S.shots).where(and(eq(S.shots.teamId, TEAM_ID), eq(S.shots.scene, sc.id)));
+  await db.delete(S.scenes).where(and(eq(S.scenes.teamId, TEAM_ID), eq(S.scenes.episode, episodeId)));
+  let idx = 1, sceneCount = 0, shotCount = 0;
+  for (let si = 0; si < result.scenes.length; si++) {
+    const sc = result.scenes[si];
+    const sceneId = 'sc_' + Math.random().toString(36).slice(2, 8);
+    const cids = sc.characters.map(nameToId);
+    await db.insert(S.scenes).values({ id: sceneId, teamId: TEAM_ID, episode: episodeId, index: si + 1, title: sc.title, loc: sc.loc, mood: sc.mood, time: sc.time, chars: cids });
+    sceneCount++;
+    for (const sh of sc.shots) {
+      await db.insert(S.shots).values({
+        id: 'sh_' + Math.random().toString(36).slice(2, 8), teamId: TEAM_ID, scene: sceneId, index: idx++, status: 'draft', model: 'seedance-2.0', chars: cids, keyframe: false, assignee: null, tone: tones[si % 4], progress: 0, error: null,
+        prompt: { visual: sh.visual, dialogue: sh.dialogue, voiceover: sh.voiceover, soundEffects: sh.soundEffects, cameraPosition: sh.cameraPosition, cameraMovement: sh.cameraMovement },
+        params: { resolution: '1080p', ratio: '16:9', duration: sh.duration, generateAudio: false, webSearch: false, watermark: false },
+        beats: null, refs: null, videoUrl: null, enhance: null, updated: ids.now(),
+      });
+      shotCount++;
+    }
+  }
+  await db.update(S.episodes).set({ shots: shotCount, done: 0, updated: ids.now() }).where(and(eq(S.episodes.id, episodeId), eq(S.episodes.teamId, TEAM_ID)));
+  await audit(db, TEAM_ID, { actor, action: 'breakdown.apply', target: episodeId, diff: `应用智能分镜 · ${sceneCount} 场 ${shotCount} 镜头` });
+  return c.json({ scenes: sceneCount, shots: shotCount });
 });
 
 /* ---------------- admin: seed ---------------- */

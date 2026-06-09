@@ -8,6 +8,7 @@ import { seed, TEAM_ID } from './db/seed';
 import { audit, hold, ids } from './services';
 import { registry, runBreakdown } from './providers';
 import { encryptSecret, decryptSecret, encKeyOf } from './crypto';
+import { ensureSchema } from './ensure-schema';
 import { models as MODELS } from '../src/lib/mock';
 import type { BreakdownResult } from '../src/lib/breakdown';
 
@@ -15,6 +16,15 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 
 export const api = new Hono<{ Bindings: Env }>();
 api.use('/api/*', cors());
+
+// Self-heal the D1 schema once per isolate (Cloudflare Builds doesn't run
+// `d1 migrations apply`, so new columns/tables would otherwise be missing in prod).
+let schemaReady: Promise<unknown> | null = null;
+api.use('/api/*', async (c, next) => {
+  if (!schemaReady) schemaReady = ensureSchema(c.env).catch((e) => { console.error('ensureSchema failed', e); });
+  await schemaReady;
+  await next();
+});
 
 const sessionUser = async (c: { env: Env; req: { raw: Request } }) => {
   const sid = getCookie(c as never, 'ms_sess');
@@ -371,9 +381,17 @@ api.post('/api/breakdown/apply', async (c) => {
   return c.json({ scenes: sceneCount, shots: shotCount });
 });
 
-/* ---------------- admin: seed ---------------- */
+/* ---------------- admin: schema repair + seed ---------------- */
+// Idempotently provision/repair the D1 schema (covers missing migration columns
+// when deploying via Cloudflare Builds, which doesn't run `d1 migrations apply`).
+api.post('/api/_migrate', async (c) => {
+  if (c.req.header('x-seed-key') !== c.env.SEED_KEY) return c.json({ error: 'forbidden' }, 403);
+  return c.json(await ensureSchema(c.env));
+});
+
 api.post('/api/_seed', async (c) => {
   if (c.req.header('x-seed-key') !== c.env.SEED_KEY) return c.json({ error: 'forbidden' }, 403);
+  await ensureSchema(c.env);
   return c.json(await seed(getDb(c.env)));
 });
 

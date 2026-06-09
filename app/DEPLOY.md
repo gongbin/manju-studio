@@ -63,6 +63,16 @@ curl -X POST https://manju-studio.<子域>.workers.dev/api/_seed -H "x-seed-key:
 
 > 生产请把 `wrangler.toml` 里的 `SEED_KEY` 改成强随机值（或删除 `[vars]` 用机密）。
 
+## 数据库 schema 自动修复
+
+Cloudflare Builds 只跑 `wrangler deploy`，**不会**执行 `d1 migrations apply`，所以新增列/表不会自动进生产库。为此 Worker 内置**幂等的 schema 自愈**：每个 isolate 首个请求会 `CREATE TABLE IF NOT EXISTS` + 补齐缺失列（忽略 duplicate column），无需手动迁移。也可显式触发一次：
+
+```bash
+curl -X POST https://<你的域名>/api/_migrate -H "x-seed-key: <SEED_KEY>"
+```
+
+若历史数据不一致，可再灌一次演示数据（会清空重建业务数据）：`POST /api/_seed`（同 header）。
+
 ## GitHub 自动构建但不提交私有 Cloudflare 参数
 
 仓库里的 `wrangler.toml` 应保持可公开的模板，不要提交你自己的 `database_id`、KV namespace `id` 或生产 `SEED_KEY`。Cloudflare Workers Builds 会在构建机器上运行 `npm run cf:prepare`，把 Dashboard 中的私有构建变量写入被忽略的 `wrangler.generated.toml`，并通过 `.wrangler/deploy/config.json` 让 `wrangler deploy` 使用这份生成配置；这些生成文件不会进入仓库。

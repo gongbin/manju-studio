@@ -11,11 +11,8 @@ import { EP_STATUS } from '@/lib/status';
 import { fmt } from '@/lib/format';
 import { projects as pSeed, episodes as eSeed, scriptContent, nameOf } from '@/lib/mock';
 import { api } from '@/lib/api';
-import { useSettings, settingsStore } from '@/lib/settings';
+import { useSettings, settingsStore, activeLlm } from '@/lib/settings';
 import { DEFAULT_BREAKDOWN_PROMPT, type BreakdownResult } from '@/lib/breakdown';
-
-// Curated ZenMux (OpenAI-compatible) model ids — vendor/model. Editable via 自定义.
-const MODELS = ['anthropic/claude-sonnet-4', 'anthropic/claude-opus-4', 'openai/gpt-5', 'openai/gpt-4o', 'openai/gpt-4o-mini', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'];
 
 function PromptModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const s = useSettings();
@@ -60,15 +57,16 @@ export function Script() {
   const [applying, setApplying] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
 
+  const prov = activeLlm(s);
   const model = s.breakdown.model;
   const setModel = (m: string) => settingsStore.setBreakdown({ model: m });
-  const customModel = () => { const m = window.prompt('输入模型 ID（vendor/model）', model); if (m && m.trim()) setModel(m.trim()); };
+  const customModel = () => { const m = window.prompt('输入模型 ID', model); if (m && m.trim()) setModel(m.trim()); };
 
   const run = async () => {
     if (!text.trim()) { toast('请先输入剧本文本', 'warn'); return; }
     setPhase('running'); setErr(null);
     try {
-      const r = await api.breakdown({ script: text, model, baseUrl: s.providers.llm.baseUrl, systemPrompt: s.breakdown.systemPrompt });
+      const r = await api.breakdown({ script: text, providerId: prov.id, style: prov.style, model, baseUrl: prov.baseUrl, systemPrompt: s.breakdown.systemPrompt });
       if (!r.scenes?.length) { setErr('未能解析出分镜结构，请检查剧本格式或调整提示词后重试。'); setPhase('error'); return; }
       setResult(r); setPhase('done');
     } catch (e) { setErr(String(e instanceof Error ? e.message : e)); setPhase('error'); }
@@ -124,12 +122,12 @@ export function Script() {
             <div className="row gap8 wrap" style={{ padding: '9px 16px', borderBottom: '1px solid var(--line)' }}>
               <Icon name="wand" size={16} className="acc" /><b style={{ fontSize: 13.5 }}>分场 / 分镜</b><span className="grow" />
               <button className="btn btn-ghost btn-sm" onClick={() => setShowPrompt(true)}><Icon name="settings" size={13} />提示词</button>
-              <Menu align="end" trigger={<button className="btn btn-ghost btn-sm"><Icon name="cpu" size={13} /><span className="mono" style={{ fontSize: 11.5 }}>{model}</span><Icon name="chevDown" size={13} /></button>}
+              <Menu align="end" trigger={<button className="btn btn-ghost btn-sm"><Icon name="cpu" size={13} /><span className="ellipsis" style={{ maxWidth: 96 }}>{prov.name}</span><span className="mono faint" style={{ fontSize: 11 }}>{model}</span><Icon name="chevDown" size={13} /></button>}
                 items={[
-                  ...MODELS.map((m) => ({ icon: m === model ? 'check' : 'cpu', label: m, onClick: () => setModel(m) })),
-                  ...(MODELS.includes(model) ? [] : [{ icon: 'check' as const, label: model, onClick: () => {} }]),
+                  ...s.llm.providers.map((pr) => ({ icon: pr.id === prov.id ? 'check' : 'cpu', label: `${pr.name} · ${pr.model}`, onClick: () => settingsStore.setActiveLlm(pr.id) })),
                   { sep: true },
                   { icon: 'edit', label: '自定义模型 ID…', onClick: customModel },
+                  { icon: 'settings', label: '管理 LLM 源…', onClick: () => navigate({ to: '/settings' }) },
                 ]} />
             </div>
 
@@ -140,7 +138,7 @@ export function Script() {
                   <div style={{ fontWeight: 700, fontSize: 16 }}>把剧本拆成镜头草稿</div>
                   <div className="muted" style={{ fontSize: 13, maxWidth: 340, marginTop: 6 }}>用 <span className="mono acc">{model}</span> 自动拆分场次、生成 Shot 草稿与结构化画面提示词。结果可逐项编辑，也可直接手填。</div>
                   <button className="btn btn-pri" style={{ marginTop: 18 }} onClick={run}><Icon name="sparkle" size={16} />智能分镜</button>
-                  <div className="faint" style={{ fontSize: 11, marginTop: 12 }}>端点 <span className="mono">{s.providers.llm.baseUrl}</span> · 密钥在服务端 LLM_API_KEY；未配置时用本地启发式拆分</div>
+                  <div className="faint" style={{ fontSize: 11, marginTop: 12 }}>{prov.name} · <span className="mono">{prov.baseUrl}</span> · {prov.style === 'anthropic' ? 'Anthropic 原生' : 'OpenAI 兼容'} · 在「设置 · Provider 凭据」配置各源 Key（改动无需重新部署）；未配置时走本地启发式拆分</div>
                 </div>
               )}
 

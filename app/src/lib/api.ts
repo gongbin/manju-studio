@@ -31,7 +31,10 @@ const store = {
   members: mock.members.map((m) => ({ ...m })) as Member[],
   invites: [] as Invite[],
   scenes: mock.scenes.map((s) => ({ ...s })) as Scene[],
+  creds: { llm: { set: false, hint: '' }, tts: { set: false, hint: '' }, video: { set: false, hint: '' } } as Record<string, { set: boolean; hint: string }>,
 };
+
+export type CredStatus = Record<string, { set: boolean; hint: string }>;
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
 export const api = {
@@ -44,8 +47,24 @@ export const api = {
   async listAssets() { return remoteOrLocal(() => req<Asset[]>('/assets'), () => clone(store.assets)); },
   async listMembers() { return remoteOrLocal(() => req<Member[]>('/members'), () => clone(store.members)); },
   async listScenes() { return remoteOrLocal(() => req<Scene[]>('/scenes'), () => clone(store.scenes)); },
+  async getCredentials() { return remoteOrLocal(() => req<CredStatus>('/credentials'), () => clone(store.creds)); },
 
-  async breakdown(input: { script: string; model: string; baseUrl: string; systemPrompt: string }): Promise<BreakdownResult> {
+  async saveCredential(family: string, apiKey: string) {
+    const hint = '••••' + apiKey.trim().slice(-4);
+    return remoteOrLocal(
+      () => req<{ ok: boolean; hint: string }>(`/credentials/${family}`, { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+      () => { store.creds[family] = { set: true, hint }; return { ok: true, hint }; },
+    );
+  },
+
+  async deleteCredential(family: string) {
+    return remoteOrLocal(
+      () => req(`/credentials/${family}`, { method: 'DELETE' }),
+      () => { store.creds[family] = { set: false, hint: '' }; return { ok: true }; },
+    );
+  },
+
+  async breakdown(input: { script: string; providerId: string; style: 'openai' | 'anthropic'; model: string; baseUrl: string; systemPrompt: string }): Promise<BreakdownResult> {
     return remoteOrLocal(
       () => req<BreakdownResult>('/breakdown', { method: 'POST', body: JSON.stringify(input) }),
       () => heuristicBreakdown(input.script),

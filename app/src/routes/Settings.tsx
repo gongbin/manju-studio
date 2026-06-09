@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
@@ -7,8 +8,9 @@ import { Modal } from '@/ui/dialog';
 import { toast } from '@/ui/toast';
 import { models } from '@/lib/mock';
 import { useTheme } from '@/theme';
-import { useSettings, settingsStore, ruleFor, priceYuan, yuanToCredits } from '@/lib/settings';
-import type { ProviderKey } from '@/lib/settings';
+import { api } from '@/lib/api';
+import { useSettings, settingsStore, ruleFor, priceYuan, yuanToCredits, llmFamily } from '@/lib/settings';
+import type { LlmProvider } from '@/lib/settings';
 
 const ACCENTS: [string, string][] = [['orange', '#e8623d'], ['violet', '#7c5cf0'], ['blue', '#3b7ff0'], ['teal', '#16a394']];
 const LOCALES: [string, string][] = [['zh-CN', '简体中文'], ['en-US', 'English']];
@@ -20,7 +22,7 @@ const SECS: [Sec, string, string][] = [
   ['defaults', '默认生成参数', 'film'], ['storage', '素材存储', 'layers'], ['billing', '计费规则', 'coins'], ['deploy', '部署', 'bolt'],
 ];
 
-interface CredModal { plane: 'data' | 'control'; provider?: ProviderKey; name?: string }
+interface CredModal { plane: 'data' | 'control'; tts?: boolean; name?: string }
 
 function chip(on: boolean) {
   return { height: 28, cursor: 'pointer', background: on ? 'var(--accent-soft)' : undefined, borderColor: on ? 'var(--accent-line)' : undefined, color: on ? 'var(--accent-text)' : undefined } as const;
@@ -29,21 +31,37 @@ const VIDEO_MODELS = models.filter((m) => m.caps.includes('image-to-video') || m
 
 function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => void }) {
   const s = useSettings();
-  const pk = cred.provider;
+  const qc = useQueryClient();
+  const tts = cred.tts;
+  const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.getCredentials });
+  const status = tts ? creds?.['tts'] : undefined;
+  const [keyInput, setKeyInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      if (tts && keyInput.trim()) { await api.saveCredential('tts', keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
+      toast('凭据已加密保存', 'lock');
+      onClose();
+    } catch (e) { toast('保存失败：' + (e instanceof Error ? e.message : e), 'warn'); setSaving(false); }
+  };
+  const removeKey = async () => { await api.deleteCredential('tts'); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); toast('已删除该 Key', 'trash'); };
   return (
     <div style={{ width: 'min(460px, 94vw)' }}>
       <div className="row gap10" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line)' }}>
         <Icon name={cred.plane === 'control' ? 'lock' : 'cpu'} size={18} className="acc" />
-        <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : '控制面 · AK / SK')}</b><div className="faint" style={{ fontSize: 12 }}>{pk ? '配置 base_url / 模型名 / API Key · 支持第三方 / 自建端点' : cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'CV MediaKit 控制面签名')}</div></div>
+        <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : '控制面 · AK / SK')}</b><div className="faint" style={{ fontSize: 12 }}>{tts ? '配置 TTS base_url / 模型名 / API Key · 支持第三方 / 自建端点' : cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'CV MediaKit 控制面签名')}</div></div>
         <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
       </div>
       <div style={{ padding: 18 }} className="col gap14">
-        {pk ? (
+        {tts ? (
           <>
-            <label><span className="lbl">Base URL（接口地址）</span><input className="field" value={s.providers[pk].baseUrl} onChange={(e) => settingsStore.setProvider(pk, { baseUrl: e.target.value })} placeholder="如：https://api.openai.com/v1" /></label>
-            <label><span className="lbl">模型名称 Model</span><input className="field" value={s.providers[pk].model} onChange={(e) => settingsStore.setProvider(pk, { model: e.target.value })} placeholder={pk === 'tts' ? '如：tts-1 / cosyvoice-v1' : '如：claude-sonnet-4-6 / gpt-4o'} /></label>
-            <label><span className="lbl">API Key</span><div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" placeholder="粘贴第三方 / 自建端点的 API Key" /></div></label>
-            <div className="faint" style={{ fontSize: 11 }}>兼容任意 OpenAI / Anthropic 风格端点（第三方代理或自建服务）；base_url 与模型名即时保存，密钥加密落库。</div>
+            <label><span className="lbl">Base URL（接口地址）</span><input className="field" value={s.tts.baseUrl} onChange={(e) => settingsStore.setTts({ baseUrl: e.target.value })} placeholder="如：https://api.openai.com/v1" /></label>
+            <label><span className="lbl">模型名称 Model</span><input className="field" value={s.tts.model} onChange={(e) => settingsStore.setTts({ model: e.target.value })} placeholder="如：tts-1 / cosyvoice-v1" /></label>
+            <label><span className="lbl">API Key {status?.set && <span className="faint">· 已配置 <span className="mono">{status.hint}</span></span>}</span>
+              <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder={status?.set ? '留空则保留现有 Key' : '粘贴第三方 / 自建端点的 API Key'} /></div></label>
+            {status?.set && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={removeKey}><Icon name="trash" size={13} />删除已保存的 Key</button>}
+            <div className="faint" style={{ fontSize: 11 }}>兼容任意 OpenAI 风格 TTS 端点（第三方代理或自建）；base_url 与模型名即时保存，密钥加密落库，<b>改 Key 无需重新部署</b>。</div>
           </>
         ) : cred.plane === 'data' ? (
           <label><span className="lbl">API Key（数据面）</span>
@@ -59,17 +77,77 @@ function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => voi
       </div>
       <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
         <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-        <button className="btn btn-pri grow" onClick={() => { onClose(); toast('凭据已加密保存', 'lock'); }}><Icon name="check" size={15} />加密保存</button>
+        <button className="btn btn-pri grow" disabled={saving} onClick={save}><Icon name={saving ? 'refresh' : 'check'} size={15} className={saving ? 'spin' : ''} />加密保存</button>
       </div>
     </div>
+  );
+}
+
+function LlmProviderModal({ editing, onClose }: { editing: LlmProvider | 'new' | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.getCredentials });
+  const ex = editing && editing !== 'new' ? editing : null;
+  const [name, setName] = useState('');
+  const [style, setStyle] = useState<'openai' | 'anthropic'>('openai');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [keyInput, setKeyInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!editing) return;
+    setName(ex?.name ?? ''); setStyle(ex?.style ?? 'openai'); setBaseUrl(ex?.baseUrl ?? ''); setModel(ex?.model ?? ''); setKeyInput('');
+  }, [editing, ex]);
+  const status = ex ? creds?.[llmFamily(ex.id)] : undefined;
+  const valid = !!name.trim() && !!baseUrl.trim() && !!model.trim();
+  const submit = async () => {
+    if (!valid) return;
+    setSaving(true);
+    try {
+      let id = ex?.id;
+      if (editing === 'new') id = settingsStore.addLlmProvider({ name: name.trim(), style, baseUrl: baseUrl.trim(), model: model.trim() });
+      else if (ex) settingsStore.updateLlmProvider(ex.id, { name: name.trim(), style, baseUrl: baseUrl.trim(), model: model.trim() });
+      if (id && keyInput.trim()) { await api.saveCredential(llmFamily(id), keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
+      toast(editing === 'new' ? 'LLM 源已添加' : 'LLM 源已更新', 'check');
+      onClose();
+    } catch (e) { toast('保存失败：' + (e instanceof Error ? e.message : e), 'warn'); setSaving(false); }
+  };
+  const removeKey = async () => { if (!ex) return; await api.deleteCredential(llmFamily(ex.id)); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); toast('已删除该 Key', 'trash'); };
+  return (
+    <Modal open={!!editing} onClose={onClose}>
+      {editing && (
+        <div style={{ width: 'min(480px, 94vw)' }}>
+          <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
+            <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="cpu" size={17} /></span>
+            <div className="grow"><b style={{ fontSize: 15 }}>{editing === 'new' ? '添加 LLM 源' : '配置 LLM 源'}</b><div className="faint" style={{ fontSize: 12 }}>名称 / 接口风格 / base_url / 模型 / API Key</div></div>
+            <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+          </div>
+          <div style={{ padding: 18, maxHeight: '66vh', overflow: 'auto' }} className="col gap14">
+            <label><span className="lbl">名称 <span style={{ color: 'var(--st-failed)' }}>*</span></span><input className="field" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="如：OpenAI / 我的自建端点" /></label>
+            <div><div className="lbl">接口风格</div><div className="seg">{([['openai', 'OpenAI 兼容'], ['anthropic', 'Anthropic 原生']] as const).map(([k, l]) => <button key={k} className={style === k ? 'on' : ''} onClick={() => setStyle(k)}>{l}</button>)}</div><div className="faint" style={{ fontSize: 11, marginTop: 4 }}>{style === 'anthropic' ? 'POST /v1/messages · x-api-key（api.anthropic.com 直连）' : 'POST /chat/completions · Bearer（OpenAI / ZenMux / DeepSeek / 自建…）'}</div></div>
+            <label><span className="lbl">Base URL <span style={{ color: 'var(--st-failed)' }}>*</span></span><input className="field" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={style === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'} /></label>
+            <label><span className="lbl">默认模型 <span style={{ color: 'var(--st-failed)' }}>*</span></span><input className="field" value={model} onChange={(e) => setModel(e.target.value)} placeholder={style === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o / anthropic/claude-sonnet-4'} /></label>
+            <label><span className="lbl">API Key {status?.set && <span className="faint">· 已配置 <span className="mono">{status.hint}</span></span>}</span>
+              <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder={status?.set ? '留空则保留现有 Key' : '粘贴该源的 API Key'} /></div></label>
+            {status?.set && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={removeKey}><Icon name="trash" size={13} />删除该源的 Key</button>}
+            <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '9px 11px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={16} className="acc" /><span>Key 经 AES-GCM 加密落库，前端永不回明文；切换 / 改 Key 即时生效，<b>无需重新部署</b>。</span></div>
+          </div>
+          <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
+            <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
+            <button className="btn btn-pri grow" disabled={!valid || saving} onClick={submit}><Icon name={saving ? 'refresh' : 'check'} size={15} className={saving ? 'spin' : ''} />{editing === 'new' ? '添加' : '保存'}</button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
 export function Settings() {
   const [sec, setSec] = useState<Sec>('providers');
   const [cred, setCred] = useState<CredModal | null>(null);
+  const [llmModal, setLlmModal] = useState<LlmProvider | 'new' | null>(null);
   const s = useSettings();
   const { theme, accent, density, setTheme, setAccent, setDensity } = useTheme();
+  const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.getCredentials });
   const def = s.defaults;
   const defModel = models.find((m) => m.id === def.model) || models[0];
   const DUR_OPTS: (number | 'smart')[] = ['smart', ...[3, 4, 5, 6, 8, 10, 12].filter((d) => d >= defModel.dur[0] && d <= defModel.dur[1])];
@@ -105,20 +183,38 @@ export function Settings() {
                 </div>
               </div>
 
-              {([{ key: 'llm', fam: 'LLM 文案', name: 'LLM · Anthropic / OpenAI 兼容端点' }, { key: 'tts', fam: 'TTS 配音', name: 'TTS · OpenAI 兼容 / 自建 / 第三方' }] as const).map((c) => {
-                const cfg = s.providers[c.key];
-                const ok = !!cfg.baseUrl && !!cfg.model;
+              <div className="row" style={{ alignItems: 'center', marginTop: 4 }}>
+                <div className="grow"><b style={{ fontSize: 14 }}>LLM 文案源（智能分镜）</b><div className="faint" style={{ fontSize: 11.5, marginTop: 2 }}>可接入多家并自由切换：ZenMux 聚合 / OpenAI · ChatGPT / Anthropic · Claude / DeepSeek / 自建端点</div></div>
+                <button className="btn btn-soft btn-sm" onClick={() => setLlmModal('new')}><Icon name="plus" size={14} />添加 LLM 源</button>
+              </div>
+              {s.llm.providers.map((pr) => {
+                const cs = creds?.[llmFamily(pr.id)];
+                const isActive = pr.id === s.llm.activeId;
                 return (
-                  <div key={c.key} className="card" style={{ padding: 14 }}>
+                  <div key={pr.id} className="card" style={{ padding: 14, borderColor: isActive ? 'var(--accent-line)' : undefined }}>
                     <div className="row gap12">
                       <span className="av" style={{ width: 34, height: 34, background: 'var(--surface-4)', color: 'var(--text-3)' }}><Icon name="cpu" size={16} /></span>
-                      <div className="grow"><div className="row gap8"><b style={{ fontSize: 14 }}>{c.name}</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>{c.fam}</span>{ok && <span className="tag" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>{cfg.model}</span>}</div><div className="mono faint" style={{ fontSize: 11, marginTop: 3 }}>{cfg.baseUrl || '未设置 base_url'} · 第三方 / 自建端点 base_url 与模型名可自定义</div></div>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data', provider: c.key, name: c.name })}>配置</button>
+                      <div className="grow" style={{ minWidth: 0 }}><div className="row gap8 wrap"><b style={{ fontSize: 14 }}>{pr.name}</b><span className="tag" style={{ height: 18, fontSize: 10 }}>{pr.style === 'anthropic' ? 'Anthropic 原生' : 'OpenAI 兼容'}</span><span className="tag mono" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>{pr.model}</span>{cs?.set ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />Key {cs.hint}</span> : <span className="pill" style={{ color: 'var(--st-draft)', background: 'var(--st-draft-bg)' }}>未配置 Key</span>}{isActive && <span className="pill" style={{ color: 'var(--accent-text)', background: 'var(--accent-soft)' }}>当前默认</span>}</div><div className="mono faint ellipsis" style={{ fontSize: 11, marginTop: 3 }}>{pr.baseUrl}</div></div>
+                      {!isActive && <button className="btn btn-ghost btn-sm" onClick={() => settingsStore.setActiveLlm(pr.id)} title="设为默认">设为默认</button>}
+                      <button className="btn btn-ghost btn-sm" onClick={() => setLlmModal(pr)}>配置</button>
+                      <Menu align="end" trigger={<button className="icon-btn"><Icon name="more" size={16} /></button>}
+                        items={[{ icon: 'edit', label: '编辑 / 设置 Key', onClick: () => setLlmModal(pr) }, { sep: true }, { icon: 'trash', label: '删除该源', danger: true, onClick: () => { if (s.llm.providers.length <= 1) { toast('至少保留一个 LLM 源', 'warn'); return; } if (window.confirm(`删除 LLM 源「${pr.name}」？`)) { settingsStore.removeLlmProvider(pr.id); toast('已删除 · ' + pr.name, 'trash'); } } }]} />
                     </div>
                   </div>
                 );
               })}
-              <div className="row gap8" style={{ fontSize: 12, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={15} className="acc" />凭据读写均记入审计日志。运行时仅在 Provider 调用瞬间于内存解密。</div>
+
+              {(() => { const ttsCs = creds?.['tts']; return (
+                <div className="card" style={{ padding: 14, marginTop: 4 }}>
+                  <div className="row gap12">
+                    <span className="av" style={{ width: 34, height: 34, background: 'var(--surface-4)', color: 'var(--text-3)' }}><Icon name="mic" size={16} /></span>
+                    <div className="grow" style={{ minWidth: 0 }}><div className="row gap8 wrap"><b style={{ fontSize: 14 }}>TTS 配音</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>OpenAI 兼容 / 自建 / 第三方</span>{s.tts.model && <span className="tag mono" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>{s.tts.model}</span>}{ttsCs?.set ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />Key {ttsCs.hint}</span> : <span className="pill" style={{ color: 'var(--st-draft)', background: 'var(--st-draft-bg)' }}>未配置 Key</span>}</div><div className="mono faint ellipsis" style={{ fontSize: 11, marginTop: 3 }}>{s.tts.baseUrl || '未设置 base_url'}</div></div>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data', tts: true, name: 'TTS 配音' })}>配置</button>
+                  </div>
+                </div>
+              ); })()}
+
+              <div className="row gap8" style={{ fontSize: 12, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={15} className="acc" />每个源的 Key 独立加密落库；切换 / 改 Key / 改端点均在平台完成，<b>无需重新部署</b>。读写记入审计。</div>
             </>
           )}
 
@@ -270,6 +366,7 @@ export function Settings() {
       <Modal open={!!cred} onClose={() => setCred(null)}>
         {cred && <CredentialBody cred={cred} onClose={() => setCred(null)} />}
       </Modal>
+      <LlmProviderModal editing={llmModal} onClose={() => setLlmModal(null)} />
     </Screen>
   );
 }

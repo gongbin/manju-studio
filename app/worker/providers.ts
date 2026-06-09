@@ -2,7 +2,7 @@
 // families. VolcengineProvider is the first video implementation; new vendors
 // implement the same interface and self-register — business code is untouched.
 import type { Env } from './env';
-import { breakdownMessages, heuristicBreakdown, normalizeBreakdown, parseJsonLoose, type BreakdownResult } from '../src/lib/breakdown';
+import { breakdownMessages, heuristicBreakdown, normalizeBreakdown, parseJsonLoose, DEFAULT_BREAKDOWN_PROMPT, type BreakdownResult } from '../src/lib/breakdown';
 
 export type Capability = 'text-to-video' | 'image-to-video' | 'text-to-image' | 'video-enhance' | 'text-to-speech';
 export type ProviderState = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -92,18 +92,15 @@ export class VolcengineProvider implements VideoProvider {
 }
 
 /* ---------------- LLM provider (OpenAI-compatible, e.g. ZenMux) ---------------- */
-const llmKey = (env: Env) => env.LLM_API_KEY || env.ZENMUX_API_KEY;
 
 /** One-shot chat completion against any OpenAI-compatible endpoint (ZenMux 默认). */
-export async function llmChat(env: Env, opts: { baseUrl: string; model: string; messages: { role: string; content: string }[]; jsonMode?: boolean }): Promise<string> {
-  const key = llmKey(env);
-  if (!key) throw new Error('no LLM key');
+export async function llmChat(opts: { apiKey: string; baseUrl: string; model: string; messages: { role: string; content: string }[]; jsonMode?: boolean }): Promise<string> {
   const base = (opts.baseUrl || 'https://zenmux.ai/api/v1').replace(/\/$/, '');
   const body: Record<string, unknown> = { model: opts.model, messages: opts.messages, temperature: 0.7 };
   if (opts.jsonMode) body.response_format = { type: 'json_object' };
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -111,16 +108,34 @@ export async function llmChat(env: Env, opts: { baseUrl: string; model: string; 
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-/** 智能分镜: call the LLM when a key is configured, else fall back to the heuristic split. */
-export async function runBreakdown(env: Env, input: { script: string; model: string; baseUrl: string; systemPrompt: string }): Promise<BreakdownResult> {
-  if (!llmKey(env)) return heuristicBreakdown(input.script);
-  const messages = breakdownMessages(input.systemPrompt, input.script);
+/** Anthropic-native chat (Claude direct) — different endpoint/headers/shape than OpenAI. */
+export async function anthropicChat(opts: { apiKey: string; baseUrl: string; model: string; system: string; user: string }): Promise<string> {
+  const base = (opts.baseUrl || 'https://api.anthropic.com').replace(/\/$/, '');
+  const res = await fetch(`${base}/v1/messages`, {
+    method: 'POST',
+    headers: { 'x-api-key': opts.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: opts.model, max_tokens: 4096, system: opts.system, messages: [{ role: 'user', content: opts.user }] }),
+  });
+  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = (await res.json()) as { content?: { text?: string }[] };
+  return (data.content ?? []).map((c) => c.text ?? '').join('');
+}
+
+/** 智能分镜: call the active LLM source (by style) when a key is available, else heuristic split. */
+export async function runBreakdown(input: { script: string; model: string; baseUrl: string; systemPrompt: string; style?: 'openai' | 'anthropic' }, apiKey: string | null): Promise<BreakdownResult> {
+  if (!apiKey) return heuristicBreakdown(input.script);
+  const system = input.systemPrompt || DEFAULT_BREAKDOWN_PROMPT;
   let content: string;
-  try {
-    content = await llmChat(env, { baseUrl: input.baseUrl, model: input.model, messages, jsonMode: true });
-  } catch {
-    // Some models/endpoints reject response_format — retry plain. Real errors here surface to the caller.
-    content = await llmChat(env, { baseUrl: input.baseUrl, model: input.model, messages });
+  if (input.style === 'anthropic') {
+    content = await anthropicChat({ apiKey, baseUrl: input.baseUrl, model: input.model, system, user: `剧本如下：\n\n${input.script}` });
+  } else {
+    const messages = breakdownMessages(input.systemPrompt, input.script);
+    try {
+      content = await llmChat({ apiKey, baseUrl: input.baseUrl, model: input.model, messages, jsonMode: true });
+    } catch {
+      // Some models/endpoints reject response_format — retry plain. Real errors here surface to the caller.
+      content = await llmChat({ apiKey, baseUrl: input.baseUrl, model: input.model, messages });
+    }
   }
   return normalizeBreakdown(parseJsonLoose(content));
 }

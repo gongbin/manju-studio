@@ -28,25 +28,35 @@ export interface GeneralSettings {
   locale: 'zh-CN' | 'en-US';
   timezone: string;
 }
-/** Non-secret config for a pluggable LLM/TTS provider (key is encrypted server-side). */
+/** Non-secret config for a pluggable provider (key is encrypted server-side). */
 export interface ProviderConfig {
+  baseUrl: string;
+  model: string;
+}
+/** One pluggable LLM source — add as many as you want and switch freely. */
+export interface LlmProvider {
+  id: string;
+  name: string;
+  style: 'openai' | 'anthropic';   // request format: OpenAI-compatible vs Anthropic-native
   baseUrl: string;
   model: string;
 }
 export interface BreakdownSettings {
   systemPrompt: string;
-  model: string;
+  model: string;                    // active model id (overrides the provider's default)
 }
 export interface Settings {
   general: GeneralSettings;
   defaults: GenDefaults;
   storage: StorageSettings;
-  providers: { llm: ProviderConfig; tts: ProviderConfig };
+  llm: { providers: LlmProvider[]; activeId: string };
+  tts: ProviderConfig;
   breakdown: BreakdownSettings;
   creditsPerYuan: number;           // 100 → 1 积分 = ¥0.01
   pricing: Record<string, PricingRule>;
 }
-export type ProviderKey = keyof Settings['providers'];
+/** Server-side credential family key for an LLM provider. */
+export const llmFamily = (id: string) => `llm_${id}`;
 
 const RES_MULT = { '480p': 0.4, '720p': 0.7, '1080p': 1, '2K': 1.6, '4K': 2.2 };
 function defaultPricing(): Record<string, PricingRule> {
@@ -56,14 +66,19 @@ function defaultPricing(): Record<string, PricingRule> {
     'seedance-lite': { yuanPerSecond: 0.2, resMult: { ...RES_MULT }, audioSurcharge: 0 },
   };
 }
+// Seeded sources cover the common open-source setups; users add/remove/edit freely.
+const DEFAULT_LLMS: LlmProvider[] = [
+  { id: 'zenmux', name: 'ZenMux（聚合网关）', style: 'openai', baseUrl: 'https://zenmux.ai/api/v1', model: 'anthropic/claude-sonnet-4' },
+  { id: 'openai', name: 'OpenAI · ChatGPT', style: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+  { id: 'anthropic', name: 'Anthropic · Claude', style: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514' },
+  { id: 'deepseek', name: 'DeepSeek', style: 'openai', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+];
 const DEFAULTS: Settings = {
   general: { workspaceName: '青冥工作室', locale: 'zh-CN', timezone: 'Asia/Shanghai' },
   defaults: { model: 'seedance-2.0', resolution: '480p', ratio: 'adaptive', duration: 'smart', generateAudio: true, watermark: true },
   storage: { backend: 'r2', tosBucket: 'manju-assets', tosRegion: 'cn-beijing' },
-  providers: {
-    llm: { baseUrl: 'https://zenmux.ai/api/v1', model: 'anthropic/claude-sonnet-4' },
-    tts: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1' },
-  },
+  llm: { providers: DEFAULT_LLMS.map((p) => ({ ...p })), activeId: 'zenmux' },
+  tts: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1' },
   breakdown: { systemPrompt: DEFAULT_BREAKDOWN_PROMPT, model: 'anthropic/claude-sonnet-4' },
   creditsPerYuan: 100,
   pricing: defaultPricing(),
@@ -76,13 +91,17 @@ function load(): Settings {
   try {
     const raw = typeof localStorage !== 'undefined' && localStorage.getItem(KEY);
     if (!raw) return clone(DEFAULTS);
-    const p = JSON.parse(raw) as Partial<Settings>;
+    const p = JSON.parse(raw) as Partial<Settings> & { providers?: { llm?: ProviderConfig; tts?: ProviderConfig } };
+    const llm = p.llm?.providers?.length
+      ? { providers: p.llm.providers, activeId: p.llm.activeId || p.llm.providers[0].id }
+      : clone(DEFAULTS.llm);
     return {
       ...DEFAULTS, ...p,
       general: { ...DEFAULTS.general, ...p.general },
       defaults: { ...DEFAULTS.defaults, ...p.defaults },
       storage: { ...DEFAULTS.storage, ...p.storage },
-      providers: { llm: { ...DEFAULTS.providers.llm, ...p.providers?.llm }, tts: { ...DEFAULTS.providers.tts, ...p.providers?.tts } },
+      llm,
+      tts: { ...DEFAULTS.tts, ...(p.tts ?? p.providers?.tts) },
       breakdown: { ...DEFAULTS.breakdown, ...p.breakdown },
       pricing: { ...defaultPricing(), ...(p.pricing ?? {}) },
     };
@@ -103,8 +122,25 @@ export const settingsStore = {
   setGeneral: (patch: Partial<GeneralSettings>) => commit({ ...state, general: { ...state.general, ...patch } }),
   setDefaults: (patch: Partial<GenDefaults>) => commit({ ...state, defaults: { ...state.defaults, ...patch } }),
   setStorage: (patch: Partial<StorageSettings>) => commit({ ...state, storage: { ...state.storage, ...patch } }),
-  setProvider: (key: ProviderKey, patch: Partial<ProviderConfig>) => commit({ ...state, providers: { ...state.providers, [key]: { ...state.providers[key], ...patch } } }),
+  setTts: (patch: Partial<ProviderConfig>) => commit({ ...state, tts: { ...state.tts, ...patch } }),
   setBreakdown: (patch: Partial<BreakdownSettings>) => commit({ ...state, breakdown: { ...state.breakdown, ...patch } }),
+  // ---- LLM sources (multi-provider) ----
+  setActiveLlm: (id: string) => {
+    const prov = state.llm.providers.find((x) => x.id === id);
+    commit({ ...state, llm: { ...state.llm, activeId: id }, breakdown: { ...state.breakdown, model: prov?.model ?? state.breakdown.model } });
+  },
+  addLlmProvider: (p: Omit<LlmProvider, 'id'>) => {
+    const id = 'llm_' + Math.random().toString(36).slice(2, 7);
+    commit({ ...state, llm: { providers: [...state.llm.providers, { ...p, id }], activeId: id }, breakdown: { ...state.breakdown, model: p.model } });
+    return id;
+  },
+  updateLlmProvider: (id: string, patch: Partial<Omit<LlmProvider, 'id'>>) => commit({ ...state, llm: { ...state.llm, providers: state.llm.providers.map((x) => (x.id === id ? { ...x, ...patch } : x)) } }),
+  removeLlmProvider: (id: string) => {
+    const providers = state.llm.providers.filter((x) => x.id !== id);
+    if (!providers.length) return;
+    const activeId = state.llm.activeId === id ? providers[0].id : state.llm.activeId;
+    commit({ ...state, llm: { providers, activeId } });
+  },
   setCreditsPerYuan: (n: number) => commit({ ...state, creditsPerYuan: Math.max(1, n || 1) }),
   setRule: (modelId: string, patch: Partial<PricingRule>) => commit({ ...state, pricing: { ...state.pricing, [modelId]: { ...ruleFor(state, modelId), ...patch } } }),
   setResMult: (modelId: string, res: string, mult: number) => {
@@ -116,6 +152,11 @@ export const settingsStore = {
 
 export function useSettings(): Settings {
   return useSyncExternalStore(settingsStore.subscribe, settingsStore.get, settingsStore.get);
+}
+
+/* ---------------- helpers ---------------- */
+export function activeLlm(s: Settings): LlmProvider {
+  return s.llm.providers.find((p) => p.id === s.llm.activeId) ?? s.llm.providers[0];
 }
 
 /* ---------------- pricing helpers ---------------- */

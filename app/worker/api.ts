@@ -7,6 +7,7 @@ import * as S from './db/schema';
 import { seed, TEAM_ID } from './db/seed';
 import { audit, hold, ids } from './services';
 import { registry, runBreakdown } from './providers';
+import { encryptSecret, decryptSecret, encKeyOf } from './crypto';
 import { models as MODELS } from '../src/lib/mock';
 import type { BreakdownResult } from '../src/lib/breakdown';
 
@@ -20,6 +21,13 @@ const sessionUser = async (c: { env: Env; req: { raw: Request } }) => {
   if (!sid) return null;
   return (await c.env.SESSIONS.get(`sess:${sid}`)) ?? null;
 };
+
+/** Resolve a provider's API key: DB-stored (platform-configured, encrypted) first, then env secret. */
+async function credentialKey(env: Env, family: string): Promise<string | null> {
+  const row = await getDb(env).select().from(S.providerCredentials).where(and(eq(S.providerCredentials.teamId, TEAM_ID), eq(S.providerCredentials.family, family))).get();
+  if (row?.secretCiphertext) return decryptSecret(encKeyOf(env), row.secretCiphertext);
+  return null;
+}
 
 /* ---------------- auth ---------------- */
 api.post('/api/auth/login', async (c) => {
@@ -288,12 +296,43 @@ api.post('/api/shots/:id/enhance', async (c) => {
   return c.json({ ok: true });
 });
 
+/* ---------------- provider credentials (platform-configured keys) ---------------- */
+api.get('/api/credentials', async (c) => {
+  const rows = await getDb(c.env).select().from(S.providerCredentials).where(eq(S.providerCredentials.teamId, TEAM_ID)).all();
+  const fam = (f: string) => { const r = rows.find((x) => x.family === f && x.secretCiphertext); return r ? { set: true, hint: r.label ?? '' } : { set: false, hint: '' }; };
+  return c.json({ llm: fam('llm'), tts: fam('tts'), video: fam('video') });
+});
+
+api.put('/api/credentials/:family', async (c) => {
+  const family = c.req.param('family');
+  const { apiKey, provider } = await c.req.json<{ apiKey?: string; provider?: string }>();
+  if (!apiKey?.trim()) return c.json({ error: 'apiKey required' }, 400);
+  const db = getDb(c.env);
+  const ciphertext = await encryptSecret(encKeyOf(c.env), apiKey.trim());
+  const hint = '••••' + apiKey.trim().slice(-4);
+  const existing = await db.select().from(S.providerCredentials).where(and(eq(S.providerCredentials.teamId, TEAM_ID), eq(S.providerCredentials.family, family))).get();
+  if (existing) await db.update(S.providerCredentials).set({ secretCiphertext: ciphertext, label: hint, provider: provider ?? existing.provider }).where(eq(S.providerCredentials.id, existing.id));
+  else await db.insert(S.providerCredentials).values({ id: 'pc_' + Math.random().toString(36).slice(2, 8), teamId: TEAM_ID, provider: provider ?? family, family, label: hint, secretCiphertext: ciphertext, isDefault: true, created: ids.now() });
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'credential.write', target: family, diff: '更新 API Key（密文）' });
+  return c.json({ ok: true, hint });
+});
+
+api.delete('/api/credentials/:family', async (c) => {
+  const family = c.req.param('family');
+  const db = getDb(c.env);
+  await db.delete(S.providerCredentials).where(and(eq(S.providerCredentials.teamId, TEAM_ID), eq(S.providerCredentials.family, family)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'credential.delete', target: family, diff: '删除凭据' });
+  return c.json({ ok: true });
+});
+
 /* ---------------- 智能分镜 (LLM breakdown) ---------------- */
 api.post('/api/breakdown', async (c) => {
-  const input = await c.req.json<{ script: string; model: string; baseUrl: string; systemPrompt: string }>();
+  const input = await c.req.json<{ script: string; providerId?: string; style?: 'openai' | 'anthropic'; model: string; baseUrl: string; systemPrompt: string }>();
   if (!input.script?.trim()) return c.json({ error: '剧本为空' }, 400);
+  const family = input.providerId ? `llm_${input.providerId}` : 'llm';
+  const apiKey = (await credentialKey(c.env, family)) ?? c.env.LLM_API_KEY ?? c.env.ZENMUX_API_KEY ?? null;
   try {
-    return c.json(await runBreakdown(c.env, input));
+    return c.json(await runBreakdown(input, apiKey));
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }

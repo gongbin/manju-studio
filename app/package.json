@@ -15,6 +15,9 @@
     "db:migrate:local": "wrangler d1 migrations apply manju-db --local",
     "db:migrate": "wrangler d1 migrations apply manju-db --remote",
     "seed:local": "wrangler dev --test-scheduled & sleep 3 && curl -s -X POST localhost:8787/api/_seed -H \"x-seed-key: dev\"",
+    "cf:prepare": "node ./scripts/prepare-cloudflare-build.mjs",
+    "cf:build": "npm run cf:prepare && npm run build",
+    "cf:deploy:builds": "npm run cf:build && wrangler deploy",
     "deploy": "npm run build && wrangler deploy",
     "cf:provision": "bash ./deploy.sh"
   },

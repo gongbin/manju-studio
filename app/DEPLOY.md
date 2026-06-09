@@ -61,6 +61,37 @@ curl -X POST https://manju-studio.<子域>.workers.dev/api/_seed -H "x-seed-key:
 
 > 生产请把 `wrangler.toml` 里的 `SEED_KEY` 改成强随机值（或删除 `[vars]` 用机密）。
 
+## GitHub 自动构建但不提交私有 Cloudflare 参数
+
+仓库里的 `wrangler.toml` 应保持可公开的模板，不要提交你自己的 `database_id`、KV namespace `id` 或生产 `SEED_KEY`。Cloudflare Workers Builds 会在构建机器上运行 `npm run cf:prepare`，把 Dashboard 中的私有构建变量写入被忽略的 `wrangler.generated.toml`，并通过 `.wrangler/deploy/config.json` 让 `wrangler deploy` 使用这份生成配置；这些生成文件不会进入仓库。
+
+在该 Worker 的 Dashboard 中进入 `Settings` → `Build`，设置：
+
+| 项 | 值 |
+|---|---|
+| Root directory | `app` |
+| Build command | `npm run cf:build` |
+| Deploy command | `npx wrangler deploy` |
+| Static assets / Output directory | `dist` |
+
+在同一页的 `Build variables and secrets` 中添加：
+
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| `MANJU_D1_DATABASE_ID` | Variable | 你的 D1 database_id |
+| `MANJU_KV_NAMESPACE_ID` | Variable | 你的 KV namespace id |
+| `MANJU_REQUIRE_PRIVATE_CONFIG` | Variable | `1`，缺少 D1/KV 时让构建直接失败 |
+| `MANJU_SEED_KEY` | Secret | 生产 seed key；脚本不会打印该值 |
+
+可选变量：`MANJU_WORKER_NAME`、`MANJU_R2_BUCKET_NAME`、`MANJU_TASK_QUEUE_NAME`。如果你的资源名仍是默认的 `manju-studio` / `manju-assets` / `manju-tasks`，不需要设置。
+
+运行时机密仍然放在 Worker 的 `Settings` → `Variables & Secrets`，不要写入仓库：
+
+```bash
+CREDENTIAL_ENC_KEY
+VOLC_ARK_API_KEY   # 可选
+```
+
 ## 线上访问报 `text/plain` MIME
 
 如果浏览器报 `TypeError: 'text/plain' is not a valid JavaScript MIME type`，通常是 Cloudflare 把源码目录 `app/` 当成静态资源发布了，导致首页仍加载 `/src/main.tsx`。正确部署后，线上首页应该加载 `/assets/*.js`，资源目录来自 `wrangler.toml` 的 `[assets].directory = "./dist"`。
@@ -70,7 +101,7 @@ curl -X POST https://manju-studio.<子域>.workers.dev/api/_seed -H "x-seed-key:
 | 项 | 值 |
 |---|---|
 | Root directory | `app` |
-| Build command | `npm run build` |
+| Build command | `npm run cf:build` |
 | Deploy command | `npx wrangler deploy` |
 | Static assets / Output directory | `dist` |
 

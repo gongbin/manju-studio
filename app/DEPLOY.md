@@ -6,7 +6,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gongbin/manju-studio)
 
-按钮会 fork 仓库、自动创建并绑定 D1/R2/KV/Queues、构建并部署。引导中若询问构建设置：根目录 `app`、构建命令 `npm run build`、部署命令 `npx wrangler deploy`、静态资源/输出目录 `dist`。部署后调用一次 `POST /api/_seed`（请求头 `x-seed-key: dev`）灌入演示数据。
+按钮会 fork 仓库、自动创建并绑定 D1/R2/KV/Queues、构建并部署。引导中若询问构建设置：根目录 `app`、构建命令 `npm run cf:build`、部署命令 `npx wrangler deploy`、静态资源/输出目录 `dist`。部署后调用一次 `POST /api/_seed`（请求头 `x-seed-key: dev`）灌入演示数据。
 
 > 偏好命令行 / 需要精确控制资源，用下面的脚本或手动步骤。
 
@@ -52,7 +52,7 @@ openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENC_KEY
 # 可选：接真实生成
 echo -n "你的火山方舟APIKey" | npx wrangler secret put VOLC_ARK_API_KEY
 
-npm run build
+npm run cf:build
 npm run db:migrate                        # wrangler d1 migrations apply manju-db --remote
 npx wrangler deploy
 # 写入演示数据（一次）
@@ -109,7 +109,7 @@ VOLC_ARK_API_KEY   # 可选
 
 ```bash
 cd app
-npm run build
+npm run cf:build
 npx wrangler deploy
 ```
 

@@ -13,7 +13,7 @@
 | 项 | 值 |
 |---|---|
 | Root directory（根目录） | `app` |
-| Build command（构建命令） | `npm run build` |
+| Build command（构建命令） | `npm run cf:build` |
 | Deploy command（部署命令） | `npx wrangler deploy` |
 | Static assets / Output directory（静态资源目录） | `dist` |
 

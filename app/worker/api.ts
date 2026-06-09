@@ -57,6 +57,16 @@ api.get('/api/assets', async (c) => {
   const rows = await getDb(c.env).select().from(S.assets).where(eq(S.assets.teamId, TEAM_ID)).orderBy(desc(S.assets.created)).all();
   return c.json(rows.map((a) => ({ id: a.id, name: a.name ?? a.id, kind: a.kind ?? a.type, ext: a.ext ?? '', tone: a.tone ?? 'a', store: a.storeLabel ?? 'R2', size: a.sizeLabel ?? '', created: a.created })));
 });
+api.get('/api/members', async (c) => {
+  const db = getDb(c.env);
+  const ms = await db.select().from(S.memberships).where(eq(S.memberships.teamId, TEAM_ID)).all();
+  const us = await db.select().from(S.users).all();
+  const byId = new Map(us.map((u) => [u.id, u]));
+  return c.json(ms.map((m) => {
+    const u = byId.get(m.userId);
+    return { id: m.userId, name: u?.name ?? m.userId, email: u?.email ?? '', role: m.role, title: u?.title ?? '', online: false, status: m.status, projectRoles: m.projectRoles ?? {} };
+  }));
+});
 api.get('/api/tasks', async (c) => c.json(await getDb(c.env).select().from(S.generationTasks).where(eq(S.generationTasks.teamId, TEAM_ID)).orderBy(desc(S.generationTasks.created)).all()));
 api.get('/api/audit', async (c) => c.json(await getDb(c.env).select().from(S.auditLogs).where(eq(S.auditLogs.teamId, TEAM_ID)).orderBy(desc(S.auditLogs.time)).all()));
 api.get('/api/models', (c) => c.json(MODELS));
@@ -121,6 +131,60 @@ api.delete('/api/assets/:id', async (c) => {
   const a = await db.select().from(S.assets).where(and(eq(S.assets.id, id), eq(S.assets.teamId, TEAM_ID))).get();
   await db.delete(S.assets).where(and(eq(S.assets.id, id), eq(S.assets.teamId, TEAM_ID)));
   await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.delete', target: a?.name ?? id, diff: '删除素材' });
+  return c.json({ ok: true });
+});
+
+/* ---------------- members & RBAC ---------------- */
+api.post('/api/members', async (c) => {
+  const d = await c.req.json<{ email: string; role: string; name?: string; title?: string }>();
+  const db = getDb(c.env);
+  const existingUser = await db.select().from(S.users).where(eq(S.users.email, d.email)).get();
+  const uid = existingUser?.id ?? 'u_' + Math.random().toString(36).slice(2, 7);
+  if (!existingUser) await db.insert(S.users).values({ id: uid, email: d.email, name: d.name?.trim() || d.email.split('@')[0], role: d.role, title: d.title ?? '受邀成员', createdAt: ids.now() });
+  const mem = await db.select().from(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid))).get();
+  if (!mem) await db.insert(S.memberships).values({ id: `mem_${uid}`, teamId: TEAM_ID, userId: uid, role: d.role, status: 'invited', projectRoles: {} });
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.invite', target: d.email, diff: `邀请加入工作空间 · 角色 ${d.role}` });
+  return c.json({ id: uid });
+});
+
+api.patch('/api/members/:id/project-role', async (c) => {
+  const uid = c.req.param('id');
+  const { projectId, role } = await c.req.json<{ projectId: string; role: string | null }>();
+  const db = getDb(c.env);
+  const mem = await db.select().from(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid))).get();
+  if (!mem) return c.json({ error: 'not found' }, 404);
+  const pr: Record<string, string> = { ...(mem.projectRoles ?? {}) };
+  if (role) pr[projectId] = role; else delete pr[projectId];
+  await db.update(S.memberships).set({ projectRoles: pr }).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.project_role', target: uid, diff: role ? `项目 ${projectId} 覆盖为 ${role}` : `项目 ${projectId} 恢复继承` });
+  return c.json({ ok: true });
+});
+
+api.patch('/api/members/:id', async (c) => {
+  const uid = c.req.param('id');
+  const { role } = await c.req.json<{ role: string }>();
+  const db = getDb(c.env);
+  await db.update(S.memberships).set({ role }).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.role', target: uid, diff: `工作空间角色 → ${role}` });
+  return c.json({ ok: true });
+});
+
+api.delete('/api/members/:id', async (c) => {
+  const uid = c.req.param('id');
+  const db = getDb(c.env);
+  await db.delete(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.remove', target: uid, diff: '移出工作空间' });
+  return c.json({ ok: true });
+});
+
+api.patch('/api/me', async (c) => {
+  const uid = (await sessionUser(c)) ?? 'u_lin';
+  const d = await c.req.json<{ name?: string; email?: string; title?: string }>();
+  const db = getDb(c.env);
+  const patch: Record<string, unknown> = {};
+  for (const k of ['name', 'email', 'title'] as const) if (k in d && d[k] != null) patch[k] = d[k];
+  if (Object.keys(patch).length) await db.update(S.users).set(patch).where(eq(S.users.id, uid));
+  await audit(db, TEAM_ID, { actor: uid, action: 'account.update', target: uid, diff: '更新账户资料' });
   return c.json({ ok: true });
 });
 

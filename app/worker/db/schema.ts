@@ -26,6 +26,8 @@ export const memberships = sqliteTable('memberships', {
   teamId: text('team_id').notNull(),
   userId: text('user_id').notNull(),
   role: text('role').notNull(),
+  status: text('status').notNull().default('active'),
+  projectRoles: text('project_roles', { mode: 'json' }).$type<Record<string, string>>().notNull().default({}),
 });
 
 export const projects = sqliteTable('projects', {

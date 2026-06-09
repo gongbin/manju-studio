@@ -15,13 +15,13 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 
 export const members: Member[] = [
-  { id: 'u_lin', name: '林深', email: 'linshen@qm.studio', role: 'owner', title: '主理人 / 导演', online: true },
-  { id: 'u_zhou', name: '周宴', email: 'zhouyan@qm.studio', role: 'admin', title: '制片管理', online: true },
-  { id: 'u_su', name: '苏拾光', email: 'sushi@qm.studio', role: 'director', title: '分镜导演', online: true },
-  { id: 'u_chen', name: '陈默', email: 'chenmo@qm.studio', role: 'creator', title: '原画 / 创作', online: false },
-  { id: 'u_qi', name: '阿杞', email: 'aqi@qm.studio', role: 'creator', title: '生成 / 创作', online: true },
-  { id: 'u_gu', name: '顾辞', email: 'guci@qm.studio', role: 'reviewer', title: '内容审核', online: false },
-  { id: 'u_man', name: '小满', email: 'xiaoman@qm.studio', role: 'viewer', title: '运营观察', online: false },
+  { id: 'u_lin', name: '林深', email: 'linshen@qm.studio', role: 'owner', title: '主理人 / 导演', online: true, status: 'active' },
+  { id: 'u_zhou', name: '周宴', email: 'zhouyan@qm.studio', role: 'admin', title: '制片管理', online: true, status: 'active' },
+  { id: 'u_su', name: '苏拾光', email: 'sushi@qm.studio', role: 'director', title: '分镜导演', online: true, status: 'active', projectRoles: { p_yj: 'creator' } },
+  { id: 'u_chen', name: '陈默', email: 'chenmo@qm.studio', role: 'creator', title: '原画 / 创作', online: false, status: 'active' },
+  { id: 'u_qi', name: '阿杞', email: 'aqi@qm.studio', role: 'creator', title: '生成 / 创作', online: true, status: 'active', projectRoles: { p_qm: 'director' } },
+  { id: 'u_gu', name: '顾辞', email: 'guci@qm.studio', role: 'reviewer', title: '内容审核', online: false, status: 'active' },
+  { id: 'u_man', name: '小满', email: 'xiaoman@qm.studio', role: 'viewer', title: '运营观察', online: false, status: 'active' },
 ];
 export const me = members[0];
 

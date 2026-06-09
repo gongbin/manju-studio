@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Icon } from '@/ui/icon';
@@ -10,7 +10,9 @@ import { useTheme } from '@/theme';
 import { useGo } from '@/lib/nav';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
-import { team, me, wallet as walletSeed, ROLE_LABEL } from '@/lib/mock';
+import { useAccount } from '@/lib/account';
+import { team, wallet as walletSeed, ROLE_LABEL } from '@/lib/mock';
+import { AccountSettingsModal, MyPermissionsModal } from './UserModals';
 
 interface NavItem { id: string; label: string; icon: string; to: string }
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -30,6 +32,8 @@ const NAV: { group: string; items: NavItem[] }[] = [
 
 function Sidebar() {
   const go = useGo();
+  const acct = useAccount();
+  const [modal, setModal] = useState<null | 'account' | 'perms'>(null);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: wallet } = useQuery({ queryKey: ['wallet'], queryFn: api.getWallet, initialData: walletSeed });
   const { data: tasks } = useQuery({ queryKey: ['tasks'], queryFn: api.listTasks, refetchInterval: 900 });
@@ -89,28 +93,31 @@ function Sidebar() {
           align="start"
           trigger={
             <button className="ws-switch" style={{ margin: 0, width: '100%' }}>
-              <Avatar name={me.name} size={26} />
+              <Avatar name={acct.name} size={26} />
               <span className="grow" style={{ minWidth: 0, textAlign: 'left' }}>
-                <span className="ellipsis" style={{ display: 'block', fontWeight: 600, fontSize: 13 }}>{me.name}</span>
-                <span className="faint" style={{ fontSize: 11 }}>{ROLE_LABEL[me.role]}</span>
+                <span className="ellipsis" style={{ display: 'block', fontWeight: 600, fontSize: 13 }}>{acct.name}</span>
+                <span className="faint" style={{ fontSize: 11 }}>{ROLE_LABEL[acct.role]}</span>
               </span>
               <Icon name="moreV" size={15} className="faint" />
             </button>
           }
           items={[
-            { icon: 'settings', label: '账户设置' },
-            { icon: 'shield', label: '我的权限' },
+            { icon: 'settings', label: '账户设置', onClick: () => setModal('account') },
+            { icon: 'shield', label: '我的权限', onClick: () => setModal('perms') },
             { sep: true },
             { icon: 'logout', label: '退出登录', danger: true, onClick: () => { localStorage.removeItem('ms.auth'); go('/login'); } },
           ]}
         />
       </div>
+      <AccountSettingsModal open={modal === 'account'} onClose={() => setModal(null)} />
+      <MyPermissionsModal open={modal === 'perms'} onClose={() => setModal(null)} />
     </aside>
   );
 }
 
 export function Topbar({ children }: { children?: ReactNode }) {
   const { theme, toggleTheme } = useTheme();
+  const acct = useAccount();
   return (
     <header className="topbar">
       <div className="grow" style={{ minWidth: 0 }}>{children}</div>
@@ -132,7 +139,7 @@ export function Topbar({ children }: { children?: ReactNode }) {
         ]}
       />
       <div className="vr" />
-      <Avatar name={me.name} size={28} />
+      <Avatar name={acct.name} size={28} />
     </header>
   );
 }

@@ -15,6 +15,9 @@ export interface Member {
   role: Role;
   title: string;
   online: boolean;
+  status?: 'active' | 'invited';
+  /** Per-project role overrides — project id → role (overrides workspace role). */
+  projectRoles?: Record<string, Role>;
 }
 
 export interface Wallet {

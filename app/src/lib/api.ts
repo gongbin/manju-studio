@@ -2,7 +2,7 @@
 // reachable (e.g. plain `vite dev` with no worker) it transparently falls back
 // to an in-memory store + polling simulation so the UI still works.
 import * as mock from './mock';
-import type { Asset, Character, Episode, GenerationTask, Project, Shot, ShotRefs, Wallet, Capability } from './types';
+import type { Asset, Character, Episode, GenerationTask, Member, Project, Role, Shot, ShotRefs, Wallet, Capability } from './types';
 
 const API = '/api';
 let useMock: boolean | null = null;
@@ -27,6 +27,7 @@ const store = {
   episodes: mock.episodes.map((e) => ({ ...e })),
   characters: mock.characters.map((c) => ({ ...c })) as Character[],
   assets: mock.assets.map((a) => ({ ...a })) as Asset[],
+  members: mock.members.map((m) => ({ ...m })) as Member[],
 };
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -38,6 +39,7 @@ export const api = {
   async listShots() { return remoteOrLocal(() => req<Shot[]>('/shots'), () => clone(store.shots)); },
   async listCharacters() { return remoteOrLocal(() => req<Character[]>('/characters'), () => clone(store.characters)); },
   async listAssets() { return remoteOrLocal(() => req<Asset[]>('/assets'), () => clone(store.assets)); },
+  async listMembers() { return remoteOrLocal(() => req<Member[]>('/members'), () => clone(store.members)); },
   async listTasks() { return remoteOrLocal(() => req<GenerationTask[]>('/tasks'), () => clone(store.tasks)); },
   async getWallet() { return remoteOrLocal(() => req<Wallet>('/wallet'), () => clone(store.wallet)); },
 
@@ -105,6 +107,54 @@ export const api = {
     return remoteOrLocal(
       () => req(`/assets/${id}`, { method: 'DELETE' }),
       () => { store.assets = store.assets.filter((a) => a.id !== id); return { ok: true }; },
+    );
+  },
+
+  async inviteMember(data: { email: string; role: Role; name?: string; title?: string }): Promise<string> {
+    return remoteOrLocal(
+      async () => (await req<{ id: string }>('/members', { method: 'POST', body: JSON.stringify(data) })).id,
+      () => {
+        const id = 'u_' + Math.random().toString(36).slice(2, 7);
+        const name = data.name?.trim() || data.email.split('@')[0];
+        store.members = [...store.members, { id, name, email: data.email, role: data.role, title: data.title || '受邀成员', online: false, status: 'invited', projectRoles: {} }];
+        return id;
+      },
+    );
+  },
+
+  async removeMember(id: string) {
+    return remoteOrLocal(
+      () => req(`/members/${id}`, { method: 'DELETE' }),
+      () => { store.members = store.members.filter((m) => m.id !== id); return { ok: true }; },
+    );
+  },
+
+  async setMemberRole(id: string, role: Role) {
+    return remoteOrLocal(
+      () => req(`/members/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+      () => { store.members = store.members.map((m) => (m.id === id ? { ...m, role } : m)); return { ok: true }; },
+    );
+  },
+
+  async setProjectRole(id: string, projectId: string, role: Role | null) {
+    return remoteOrLocal(
+      () => req(`/members/${id}/project-role`, { method: 'PATCH', body: JSON.stringify({ projectId, role }) }),
+      () => {
+        store.members = store.members.map((m) => {
+          if (m.id !== id) return m;
+          const pr = { ...(m.projectRoles ?? {}) };
+          if (role) pr[projectId] = role; else delete pr[projectId];
+          return { ...m, projectRoles: pr };
+        });
+        return { ok: true };
+      },
+    );
+  },
+
+  async updateMe(data: { name?: string; email?: string; title?: string }) {
+    return remoteOrLocal(
+      () => req('/me', { method: 'PATCH', body: JSON.stringify(data) }),
+      () => { store.members = store.members.map((m) => (m.id === mock.me.id ? { ...m, ...data } : m)); return { ok: true }; },
     );
   },
 

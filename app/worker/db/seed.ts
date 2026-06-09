@@ -21,7 +21,7 @@ export async function seed(db: DrizzleD1Database<typeof S>) {
   await db.insert(S.teams).values({ id: TEAM_ID, name: mock.team.name, slug: mock.team.slug, plan: mock.team.plan, createdAt: now });
 
   await insertEach(mock.members, (m) => db.insert(S.users).values({ id: m.id, email: m.email, name: m.name, role: m.role, title: m.title, createdAt: now }));
-  await insertEach(mock.members, (m) => db.insert(S.memberships).values({ id: `mem_${m.id}`, teamId: TEAM_ID, userId: m.id, role: m.role }));
+  await insertEach(mock.members, (m) => db.insert(S.memberships).values({ id: `mem_${m.id}`, teamId: TEAM_ID, userId: m.id, role: m.role, status: m.status ?? 'active', projectRoles: m.projectRoles ?? {} }));
 
   await db.insert(S.creditWallets).values({ teamId: TEAM_ID, balance: mock.wallet.balance, monthSpent: mock.wallet.monthSpent, monthBudget: mock.wallet.monthBudget });
 

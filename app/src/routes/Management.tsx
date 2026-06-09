@@ -11,6 +11,7 @@ import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
 import { characters as charSeed, assets as assetSeed, members, audit, ROLE_LABEL, nameOf, wallet as walletSeed } from '@/lib/mock';
+import { useSettings, settingsStore, STORAGE_LABEL, STORAGE_SHORT } from '@/lib/settings';
 import type { Asset, Role } from '@/lib/types';
 
 const TONES: [string, string][] = [['b', '青紫'], ['a', '暗棕'], ['c', '暖褐'], ['d', '青绿']];
@@ -69,8 +70,15 @@ function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 export function Characters() {
+  const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
   const { data: characters = [] } = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters, initialData: charSeed });
+  const del = async (id: string, name: string) => {
+    if (!window.confirm(`确认删除角色「${name}」？该角色的一致性资产引用将被移除。`)) return;
+    await api.deleteCharacter(id);
+    qc.invalidateQueries({ queryKey: ['characters'] });
+    toast('已删除角色 · ' + name, 'trash');
+  };
   return (
     <Screen crumb={<Crumb parts={[{ label: '角色库' }]} />}>
       <div className="page">
@@ -83,6 +91,8 @@ export function Characters() {
                 <div style={{ position: 'absolute', top: 8, right: 8 }} className="row gap6">
                   {c.asset && <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="link" size={11} />一致性</span>}
                   <span className="tag" style={{ height: 21 }}>{c.tag}</span>
+                  <Menu align="end" trigger={<button className="icon-btn" style={{ width: 24, height: 24, background: 'var(--scrim-2, rgba(0,0,0,.4))' }}><Icon name="more" size={14} /></button>}
+                    items={[{ icon: 'edit', label: '编辑角色' }, { sep: true }, { icon: 'trash', label: '删除角色', danger: true, onClick: () => del(c.id, c.name) }]} />
                 </div>
               </div>
               <div style={{ padding: 13 }}>
@@ -115,6 +125,8 @@ function kindOf(file: File): Asset['kind'] {
 
 function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
+  const s = useSettings();
+  const backend = s.storage.backend;
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const tones: Asset['tone'][] = ['a', 'b', 'c', 'd'];
@@ -127,10 +139,10 @@ function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => voi
       const f = files[i];
       const dot = f.name.lastIndexOf('.');
       const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : kindOf(f);
-      await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: kindOf(f), ext, size: fmtBytes(f.size), tone: tones[i % 4] });
+      await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: kindOf(f), ext, size: fmtBytes(f.size), tone: tones[i % 4], store: STORAGE_SHORT[backend] });
     }
     qc.invalidateQueries({ queryKey: ['assets'] });
-    toast(`已上传 ${files.length} 个素材 · Cloudflare R2`, 'gallery');
+    toast(`已上传 ${files.length} 个素材 · ${STORAGE_LABEL[backend]}`, 'gallery');
     reset();
     onClose();
   };
@@ -139,10 +151,14 @@ function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => voi
       <div style={{ width: 'min(520px, 94vw)' }}>
         <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
           <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="gallery" size={17} /></span>
-          <div className="grow"><b style={{ fontSize: 15 }}>上传素材</b><div className="faint" style={{ fontSize: 12 }}>图 / 视频 / 音频 · 默认上传至 Cloudflare R2</div></div>
+          <div className="grow"><b style={{ fontSize: 15 }}>上传素材</b><div className="faint" style={{ fontSize: 12 }}>图 / 视频 / 音频 · 当前上传至 {STORAGE_LABEL[backend]}</div></div>
           <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
         </div>
         <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap14">
+          <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '8px 11px', background: 'var(--surface-2)', borderRadius: 9 }}>
+            <Icon name={backend === 'tos' ? 'cpu' : 'layers'} size={15} className="acc" />
+            <span>存储后端：<b>{STORAGE_LABEL[backend]}</b>{backend === 'tos' ? `（${s.storage.tosBucket} · ${s.storage.tosRegion}）` : ''}。可在 设置 · 存储 中切换。</span>
+          </div>
           <input ref={inputRef} type="file" multiple accept="image/*,video/*,audio/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = ''; }} />
           <div onClick={() => inputRef.current?.click()} className="center col gap8" style={{ cursor: 'pointer', border: '1.5px dashed var(--line-2)', borderRadius: 12, padding: '28px 16px', color: 'var(--text-3)' }}>
             <Icon name="import" size={28} className="acc" />
@@ -173,15 +189,28 @@ function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => voi
 }
 
 export function Assets() {
+  const qc = useQueryClient();
+  const s = useSettings();
   const [type, setType] = useState('all');
   const [showUpload, setShowUpload] = useState(false);
   const { data: assets = [] } = useQuery({ queryKey: ['assets'], queryFn: api.listAssets, initialData: assetSeed });
   const list = assets.filter((a) => type === 'all' || a.kind === type);
+  const del = async (id: string, name: string) => {
+    if (!window.confirm(`确认删除素材「${name}」？`)) return;
+    await api.deleteAsset(id);
+    qc.invalidateQueries({ queryKey: ['assets'] });
+    toast('已删除素材 · ' + name, 'trash');
+  };
   return (
     <Screen crumb={<Crumb parts={[{ label: '素材库' }]} />}>
       <div className="page">
         <div className="page-head">
-          <div className="grow"><div className="page-title">素材库</div><div className="page-sub">图 / 视频 / 音频统一管理 · 默认 Cloudflare R2 · 可选火山 TOS</div></div>
+          <div className="grow"><div className="page-title">素材库</div><div className="page-sub">图 / 视频 / 音频统一管理 · 存储后端可切换：Cloudflare R2 ↔ 火山 TOS</div></div>
+          <Menu align="end" trigger={<button className="btn btn-ghost"><Icon name={s.storage.backend === 'tos' ? 'cpu' : 'layers'} size={15} />{STORAGE_LABEL[s.storage.backend]}<Icon name="chevDown" size={13} /></button>}
+            items={[
+              { icon: s.storage.backend === 'r2' ? 'check' : 'layers', label: 'Cloudflare R2', onClick: () => { settingsStore.setStorage({ backend: 'r2' }); toast('存储后端已切换 · Cloudflare R2', 'layers'); } },
+              { icon: s.storage.backend === 'tos' ? 'check' : 'cpu', label: '火山 TOS', onClick: () => { settingsStore.setStorage({ backend: 'tos' }); toast('存储后端已切换 · 火山 TOS', 'cpu'); } },
+            ]} />
           <div className="seg">{[['all', '全部'], ['image', '图片'], ['video', '视频'], ['audio', '音频']].map(([k, l]) => <button key={k} className={type === k ? 'on' : ''} onClick={() => setType(k)}>{l}</button>)}</div>
           <button className="btn btn-pri" onClick={() => setShowUpload(true)}><Icon name="plus" size={16} />上传</button>
         </div>
@@ -191,6 +220,10 @@ export function Assets() {
               <div style={{ position: 'relative' }}>
                 <Thumb w="100%" h={108} tone={a.tone} rounded={0} label={KIND_LABEL[a.kind] + ' ' + a.name.replace(/^[A-Z]+_/, '')} playable={a.kind === 'video'} />
                 {a.kind === 'audio' && <div className="center" style={{ position: 'absolute', inset: 0 }}><Icon name="mic" size={24} className="faint" /></div>}
+                <div style={{ position: 'absolute', top: 6, right: 6 }}>
+                  <Menu align="end" trigger={<button className="icon-btn" style={{ width: 24, height: 24, background: 'rgba(0,0,0,.4)' }}><Icon name="more" size={14} /></button>}
+                    items={[{ icon: 'download', label: '下载' }, { icon: 'copy', label: '复制链接' }, { sep: true }, { icon: 'trash', label: '删除素材', danger: true, onClick: () => del(a.id, a.name) }]} />
+                </div>
               </div>
               <div className="row" style={{ padding: '8px 10px', justifyContent: 'space-between', fontSize: 11.5 }}>
                 <span className="mono faint">·{a.ext}</span><span className="faint">{a.size} · {a.store}</span>

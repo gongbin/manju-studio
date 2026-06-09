@@ -78,7 +78,7 @@ export function Tasks() {
                       <td className="faint">{fmt.ago(t.created)}</td>
                       <td>
                         {t.state === 'failed' ? <button className="btn btn-ghost btn-sm"><Icon name="retry" size={13} />重试</button>
-                          : t.state === 'succeeded' ? <button className="icon-btn" style={{ width: 26, height: 26 }}><Icon name="download" size={15} /></button>
+                          : t.state === 'succeeded' ? <button className="icon-btn" style={{ width: 26, height: 26 }} title={(t.videoUrl || sh?.videoUrl) ? '下载视频' : '暂无视频'} disabled={!(t.videoUrl || sh?.videoUrl)} onClick={() => { const u = t.videoUrl || sh?.videoUrl; if (u) window.open(u, '_blank'); }}><Icon name="download" size={15} /></button>
                             : <span className="faint mono" style={{ fontSize: 11 }}>{t.progress || 0}%</span>}
                       </td>
                     </tr>

@@ -94,6 +94,9 @@ export const shots: Shot[] = [
   { id: 'sh10', scene: 's3', index: 10, status: 'draft', model: 'seedance-2.0', chars: [], keyframe: false, assignee: null, tone: 'a', prompt: mkPrompt({ visual: '空镜：客栈灯笼在雨夜中明灭，镜头拉远至整座青冥城笼罩在雨雾里', cameraPosition: '空镜·大远景', cameraMovement: '持续后拉上升', soundEffects: '雨声渐起、配乐进' }), params: mkParams({ duration: 7, generateAudio: true }) },
 ];
 
+// Generated shots already have a downloadable video (按 taskid 回写的视频信息)。
+shots.forEach((s) => { if (s.status === 'generated' && !s.videoUrl) s.videoUrl = `https://demo.cdn/manju/${s.id}.mp4`; });
+
 export const tasks: GenerationTask[] = [
   { id: 'tk_8821', shot: 'sh5', shotIdx: 5, ep: 'e3', cap: 'image-to-video', model: 'seedance-2.0', state: 'running', progress: 62, cost: 240, by: 'u_qi', created: mins(2), ptid: 'cgt-7f3a91' },
   { id: 'tk_8820', shot: 'sh6', shotIdx: 6, ep: 'e3', cap: 'text-to-video', model: 'seedance-2.0', state: 'queued', progress: 0, cost: 120, by: 'u_qi', created: mins(3), ptid: 'cgt-7f3a72' },

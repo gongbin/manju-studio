@@ -97,19 +97,38 @@ api.post('/api/characters', async (c) => {
 });
 
 api.post('/api/assets', async (c) => {
-  const d = await c.req.json<{ name: string; kind: string; ext?: string; size?: string; tone?: string; project?: string }>();
+  const d = await c.req.json<{ name: string; kind: string; ext?: string; size?: string; tone?: string; store?: string; project?: string }>();
   const db = getDb(c.env);
   const id = 'as_' + Math.random().toString(36).slice(2, 7);
-  await db.insert(S.assets).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', type: d.kind, storage: 'r2', size: 0, name: d.name, kind: d.kind, ext: d.ext ?? '', tone: d.tone ?? 'a', storeLabel: 'R2', sizeLabel: d.size ?? '', created: ids.now() });
-  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.upload', target: d.name, diff: `上传素材 · ${d.kind}` });
+  const storeLabel = d.store ?? 'R2';
+  await db.insert(S.assets).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', type: d.kind, storage: storeLabel === 'TOS' ? 'tos' : 'r2', size: 0, name: d.name, kind: d.kind, ext: d.ext ?? '', tone: d.tone ?? 'a', storeLabel, sizeLabel: d.size ?? '', created: ids.now() });
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.upload', target: d.name, diff: `上传素材 · ${d.kind} · ${storeLabel}` });
   return c.json({ id });
+});
+
+api.delete('/api/characters/:id', async (c) => {
+  const id = c.req.param('id');
+  const db = getDb(c.env);
+  const ch = await db.select().from(S.characters).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID))).get();
+  await db.delete(S.characters).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'character.delete', target: ch?.name ?? id, diff: '删除角色' });
+  return c.json({ ok: true });
+});
+
+api.delete('/api/assets/:id', async (c) => {
+  const id = c.req.param('id');
+  const db = getDb(c.env);
+  const a = await db.select().from(S.assets).where(and(eq(S.assets.id, id), eq(S.assets.teamId, TEAM_ID))).get();
+  await db.delete(S.assets).where(and(eq(S.assets.id, id), eq(S.assets.teamId, TEAM_ID)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.delete', target: a?.name ?? id, diff: '删除素材' });
+  return c.json({ ok: true });
 });
 
 api.patch('/api/shots/:id', async (c) => {
   const id = c.req.param('id');
   const patch = await c.req.json<Record<string, unknown>>();
   const allowed: Record<string, unknown> = {};
-  for (const k of ['status', 'model', 'prompt', 'params', 'beats', 'chars', 'keyframe', 'assignee', 'progress', 'error', 'enhance'] as const) {
+  for (const k of ['status', 'model', 'prompt', 'params', 'beats', 'refs', 'videoUrl', 'chars', 'keyframe', 'assignee', 'progress', 'error', 'enhance'] as const) {
     if (k in patch) allowed[k] = patch[k];
   }
   allowed.updated = ids.now();
@@ -128,11 +147,18 @@ api.post('/api/shots/generate', async (c) => {
   for (const sid of shotIds) {
     const shot = await db.select().from(S.shots).where(eq(S.shots.id, sid)).get();
     if (!shot) continue;
-    const cap = shot.keyframe ? 'image-to-video' : 'text-to-video';
+    const cap = shot.refs?.images?.length || shot.keyframe ? 'image-to-video' : 'text-to-video';
     const taskId = `tk_${n++}`;
     let ptid = `cgt-${Math.random().toString(16).slice(2, 8)}`;
+    // Per-shot references (each scene uploads its own) + first character asset for consistency.
+    let charAsset: string | undefined;
+    for (const cid of shot.chars ?? []) {
+      const ch = await db.select().from(S.characters).where(eq(S.characters.id, cid)).get();
+      if (ch?.asset) { charAsset = ch.asset; break; }
+    }
+    const references = { images: shot.refs?.images ?? [], videos: shot.refs?.videos ?? [], audios: shot.refs?.audios ?? [], characterAssetId: charAsset };
     try {
-      const pt = await registry.videoProvider()!.createTask({ modelId: model, capability: cap, prompt: shot.prompt, params: shot.params, references: { characterAssetId: undefined } }, c.env);
+      const pt = await registry.videoProvider()!.createTask({ modelId: model, capability: cap, prompt: shot.prompt, params: shot.params, references }, c.env);
       if (pt) ptid = pt.providerTaskId;
     } catch { /* fall back to simulation */ }
     await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: 'e3', cap, model, provider: 'volcengine', ptid, state: 'queued', progress: 0, cost: per, by: actor, created: ids.now(), updated: ids.now() });

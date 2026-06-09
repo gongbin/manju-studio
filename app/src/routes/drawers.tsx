@@ -9,9 +9,10 @@ import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
 import { models, characters, charOf, wallet as walletSeed } from '@/lib/mock';
-import type { Shot, TimeBeat } from '@/lib/types';
+import { useSettings, ruleFor, priceYuan, yuanToCredits } from '@/lib/settings';
+import type { Shot, ShotRefs, TimeBeat } from '@/lib/types';
 
-const RES_MULT: Record<string, number> = { '480p': 1, '720p': 1.8, '1080p': 3, '4K': 6 };
+const yuan = (n: number) => '¥' + (n < 10 ? n.toFixed(2) : n.toFixed(1));
 
 function ChipBtn({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
   return <button onClick={onClick} className="tag" style={{ height: 28, cursor: 'pointer', background: on ? 'var(--accent-soft)' : undefined, borderColor: on ? 'var(--accent-line)' : undefined, color: on ? 'var(--accent-text)' : undefined }}>{label}</button>;
@@ -68,52 +69,81 @@ function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
   );
 }
 
+type Buckets = { images: RefItem[]; videos: RefItem[]; audios: RefItem[] };
+const emptyBuckets = (): Buckets => ({ images: [], videos: [], audios: [] });
+
 export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: () => void }) {
   const qc = useQueryClient();
+  const s = useSettings();
   const { data: wallet = walletSeed } = useQuery({ queryKey: ['wallet'], queryFn: api.getWallet, initialData: walletSeed });
-  const [modelId, setModelId] = useState(shots[0]?.model ?? 'seedance-2.0');
+  const def = s.defaults;
+  const initModel = models.find((m) => m.id === (shots[0]?.model ?? def.model)) || models[0];
+  const [modelId, setModelId] = useState(shots[0]?.model ?? def.model);
   const model = models.find((m) => m.id === modelId) || models[0];
-  const initModel = models.find((m) => m.id === (shots[0]?.model ?? 'seedance-2.0')) || models[0];
-  const [res, setRes] = useState(initModel.res.includes('480p') ? '480p' : initModel.res[0]);
-  const [ratio, setRatio] = useState('adaptive');
-  const [dur, setDur] = useState<string | number>('smart');
-  const [audio, setAudio] = useState(true);
+  const [res, setRes] = useState(initModel.res.includes(def.resolution) ? def.resolution : initModel.res.includes('480p') ? '480p' : initModel.res[0]);
+  const [ratio, setRatio] = useState(def.ratio);
+  const [dur, setDur] = useState<number | 'smart'>(def.duration);
+  const [audio, setAudio] = useState(def.generateAudio);
   const [web, setWeb] = useState(false);
-  const [wm, setWm] = useState(true);
+  const [wm, setWm] = useState(def.watermark);
   const [prompt, setPrompt] = useState(() => ({ ...shots[0]?.prompt }));
   const [beats, setBeats] = useState<TimeBeat[]>(() => (shots[0]?.beats ?? []).map((b) => ({ ...b })));
-  const [refImgs, setRefImgs] = useState<RefItem[]>([]);
-  const [refVids, setRefVids] = useState<RefItem[]>([]);
-  const [refAuds, setRefAuds] = useState<RefItem[]>([]);
+  const [refs, setRefs] = useState<Record<string, Buckets>>(() => Object.fromEntries(shots.map((sh) => [sh.id, emptyBuckets()])));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(shots.length === 1 ? [shots[0].id] : []));
 
-  const durSec = dur === 'smart' ? 5 : Number(dur);
-  const perShot = Math.round((model.base * durSec * (RES_MULT[res] || 1) * (audio ? 1.15 : 1)) / 5);
-  const total = perShot * shots.length;
-  const durOpts: (string | number)[] = ['smart', ...[3, 4, 5, 6, 8, 10, 12].filter((d) => d >= model.dur[0] && d <= model.dur[1])];
+  const single = shots.length === 1;
+  const rule = ruleFor(s, modelId);
+  const durSec = (sh: Shot) => (dur === 'smart' ? sh.params.duration || 5 : Number(dur));
+  const totalYuan = shots.reduce((a, sh) => a + priceYuan(rule, durSec(sh), res, !!audio), 0);
+  const totalCredits = yuanToCredits(s, totalYuan);
+  const durOpts: (number | 'smart')[] = ['smart', ...[3, 4, 5, 6, 8, 10, 12].filter((d) => d >= model.dur[0] && d <= model.dur[1])];
+
+  const setBucket = (id: string, k: keyof Buckets, items: RefItem[]) => setRefs((r) => ({ ...r, [id]: { ...(r[id] ?? emptyBuckets()), [k]: items } }));
+  const refCount = (id: string) => { const b = refs[id] ?? emptyBuckets(); return b.images.length + b.videos.length + b.audios.length; };
+  const toggleExp = (id: string) => setExpanded((e) => { const n = new Set(e); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const refZones = (id: string) => {
+    const b = refs[id] ?? emptyBuckets();
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+        <RefZone icon="image" label="Images" max={9} on={model.refImg} accept="image/*" multiple items={b.images} setItems={(v) => setBucket(id, 'images', v)} />
+        <RefZone icon="film" label="Video" max={3} on={model.refVid} accept="video/*" multiple items={b.videos} setItems={(v) => setBucket(id, 'videos', v)} />
+        <RefZone icon="mic" label="Audio" max={3} on={model.refAud} accept="audio/*" multiple items={b.audios} setItems={(v) => setBucket(id, 'audios', v)} />
+      </div>
+    );
+  };
 
   const submit = async () => {
-    if (shots.length === 1) await api.updateShot(shots[0].id, { prompt: { ...prompt } as Shot['prompt'], beats });
-    await api.submitGenerate(shots.map((s) => s.id), { model: modelId }, total);
+    const toUrls = (items: RefItem[]) => items.map((i) => (i.kind === 'url' ? i.name : `upload://${i.name}`));
+    const refsPayload: Record<string, ShotRefs> = {};
+    for (const sh of shots) { const b = refs[sh.id] ?? emptyBuckets(); refsPayload[sh.id] = { images: toUrls(b.images), videos: toUrls(b.videos), audios: toUrls(b.audios) }; }
+    for (const sh of shots) {
+      const patch: Partial<Shot> = {
+        params: { ...sh.params, resolution: res, ratio: ratio === 'adaptive' ? sh.params.ratio : ratio, generateAudio: !!audio, watermark: !!wm, ...(dur !== 'smart' ? { duration: Number(dur) } : {}) },
+        refs: refsPayload[sh.id],
+      };
+      if (single) { patch.prompt = { ...prompt } as Shot['prompt']; patch.beats = beats; }
+      await api.updateShot(sh.id, patch);
+    }
+    await api.submitGenerate(shots.map((sh) => sh.id), { model: modelId, resolution: res, ratio, duration: dur, generateAudio: !!audio, watermark: !!wm }, totalCredits, refsPayload);
     qc.invalidateQueries({ queryKey: ['shots'] });
     qc.invalidateQueries({ queryKey: ['tasks'] });
     qc.invalidateQueries({ queryKey: ['wallet'] });
-    toast(`已提交 ${shots.length} 个生成任务 · 预扣 ${fmt.credits(total)} 积分`, 'sparkle');
+    toast(`已分次提交 ${shots.length} 个生成任务 · 预扣 ${yuan(totalYuan)}（${fmt.credits(totalCredits)} 积分）`, 'sparkle');
     onClose();
   };
 
-  const single = shots.length === 1;
   const P = (k: keyof typeof prompt, v: string) => setPrompt((p) => ({ ...p, [k]: v }));
 
   return (
     <Drawer open onClose={onClose}>
       <div className="row gap10" style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
         <Icon name="sparkle" size={18} className="acc" />
-        <div className="grow"><b style={{ fontSize: 15 }}>提交镜头生成</b><div className="faint" style={{ fontSize: 12 }}>{shots.length} 个镜头 · 参数面板由 Provider 模型驱动</div></div>
+        <div className="grow"><b style={{ fontSize: 15 }}>提交镜头生成</b><div className="faint" style={{ fontSize: 12 }}>{shots.length} 个镜头 · 基础参数共用 · 参考素材各镜头独立 · 逐条提交</div></div>
         <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: 18 }} className="col gap20">
-        {single ? (
+        {single && (
           <div>
             <div className="row gap8" style={{ marginBottom: 10 }}><Icon name="film" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>镜头 #{fmt.pad2(shots[0].index)} · 提示词</b></div>
             <div className="col gap12">
@@ -152,18 +182,6 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
               </div>
             </div>
           </div>
-        ) : (
-          <div>
-            <div className="lbl">将生成的镜头 · {shots.length}</div>
-            <div className="col gap6" style={{ maxHeight: 150, overflow: 'auto' }}>
-              {shots.map((s) => (
-                <div key={s.id} className="row gap10" style={{ padding: '6px 8px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                  <Thumb w={48} h={28} tone={s.tone} label="" /><span className="mono faint" style={{ fontSize: 11 }}>#{fmt.pad2(s.index)}</span>
-                  <span className="grow ellipsis" style={{ fontSize: 12 }}>{s.prompt.visual}</span><span className="mono faint" style={{ fontSize: 11 }}>{s.params.duration}s</span>
-                </div>
-              ))}
-            </div>
-          </div>
         )}
 
         <div>
@@ -178,11 +196,11 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
         </div>
 
         <div>
-          <div className="row gap8" style={{ marginBottom: 12 }}><Icon name="settings" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>生成参数</b></div>
+          <div className="row gap8" style={{ marginBottom: 12 }}><Icon name="settings" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>基础参数 · 全部镜头共用</b></div>
           <div className="col gap14">
             <div><div className="lbl">分辨率 Resolution</div><div className="row gap6 wrap">{model.res.map((r) => <ChipBtn key={r} on={res === r} label={r} onClick={() => setRes(r)} />)}</div></div>
             <div><div className="lbl">画面比例 Ratio</div><div className="row gap6 wrap">{['adaptive', ...model.ratios].map((r) => <ChipBtn key={r} on={ratio === r} label={r === 'adaptive' ? 'adaptive · 智能匹配' : r} onClick={() => setRatio(r)} />)}</div></div>
-            {model.dur[1] > 0 && <div><div className="lbl">时长 Duration</div><div className="row gap6 wrap">{durOpts.map((d) => <ChipBtn key={d} on={dur === d} label={d === 'smart' ? '智能指定' : d + 's'} onClick={() => setDur(d)} />)}</div></div>}
+            {model.dur[1] > 0 && <div><div className="lbl">时长 Duration</div><div className="row gap6 wrap">{durOpts.map((d) => <ChipBtn key={d} on={dur === d} label={d === 'smart' ? '智能指定 · 按镜头时长' : d + 's'} onClick={() => setDur(d)} />)}</div></div>}
             <div className="row gap8 wrap" style={{ paddingTop: 2 }}>
               <Toggle on={web} set={setWeb} label="Web Search 联网检索" />
               {model.audio && <Toggle on={audio} set={setAudio} label="Generate Audio 生成音频" />}
@@ -192,13 +210,27 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
         </div>
 
         <div>
-          <div className="row gap8" style={{ marginBottom: 3 }}><Icon name="image" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>参考素材 Reference</b></div>
-          <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>注入为 reference_image / video / audio，提升一致性与运镜还原 · 受模型数量上限约束</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            <RefZone icon="image" label="Images" max={9} on={model.refImg} accept="image/*" multiple items={refImgs} setItems={setRefImgs} />
-            <RefZone icon="film" label="Video" max={3} on={model.refVid} accept="video/*" multiple items={refVids} setItems={setRefVids} />
-            <RefZone icon="mic" label="Audio" max={3} on={model.refAud} accept="audio/*" multiple items={refAuds} setItems={setRefAuds} />
-          </div>
+          <div className="row gap8" style={{ marginBottom: 3 }}><Icon name="image" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>参考素材 Reference · 各镜头独立</b></div>
+          <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>注入为 reference_image / video / audio，提升一致性与运镜还原 · 受模型数量上限约束 · {single ? '此镜头单独上传' : '每个镜头分别上传，逐条提交'}</div>
+          {single ? (
+            refZones(shots[0].id)
+          ) : (
+            <div className="col gap6">
+              {shots.map((sh) => (
+                <div key={sh.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                  <button className="row gap8" style={{ width: '100%', padding: '8px 10px', cursor: 'pointer', background: 'transparent', textAlign: 'left', border: 'none' }} onClick={() => toggleExp(sh.id)}>
+                    <Thumb w={40} h={24} tone={sh.tone} label="" />
+                    <span className="mono faint" style={{ fontSize: 11 }}>#{fmt.pad2(sh.index)}</span>
+                    <span className="grow ellipsis" style={{ fontSize: 12 }}>{sh.prompt.visual}</span>
+                    {refCount(sh.id) > 0 && <span className="tag" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>{refCount(sh.id)} 素材</span>}
+                    <span className="mono faint" style={{ fontSize: 11 }}>{durSec(sh)}s</span>
+                    <Icon name={expanded.has(sh.id) ? 'chevDown' : 'chevRight'} size={14} className="faint" />
+                  </button>
+                  {expanded.has(sh.id) && <div style={{ padding: '0 10px 10px' }}>{refZones(sh.id)}</div>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {model.charAsset && (
@@ -219,12 +251,12 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
 
       <div style={{ borderTop: '1px solid var(--line)', padding: 16 }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-          <div><div className="faint" style={{ fontSize: 12 }}>预扣积分 · {shots.length} 镜头 × ~{perShot}</div><div className="row gap6" style={{ alignItems: 'baseline' }}><span className="mono acc" style={{ fontSize: 22, fontWeight: 700 }}>{fmt.credits(total)}</span><span className="faint" style={{ fontSize: 12 }}>积分</span></div></div>
-          <div style={{ textAlign: 'right', fontSize: 12 }}><div className="faint">钱包余额</div><div className="mono" style={{ fontWeight: 600 }}>{fmt.credits(wallet.balance)}</div></div>
+          <div><div className="faint" style={{ fontSize: 12 }}>预扣 · {shots.length} 镜头 · {rule.yuanPerSecond}元/秒 @{res}</div><div className="row gap6" style={{ alignItems: 'baseline' }}><span className="mono acc" style={{ fontSize: 22, fontWeight: 700 }}>{yuan(totalYuan)}</span><span className="faint" style={{ fontSize: 12 }}>≈ {fmt.credits(totalCredits)} 积分</span></div></div>
+          <div style={{ textAlign: 'right', fontSize: 12 }}><div className="faint">钱包余额</div><div className="mono" style={{ fontWeight: 600 }}>{fmt.credits(wallet.balance)} 积分</div></div>
         </div>
         <div className="row gap8">
           <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-          <button className="btn btn-pri grow" onClick={submit}><Icon name="sparkle" size={16} />提交生成 · 预扣 {fmt.credits(total)}</button>
+          <button className="btn btn-pri grow" onClick={submit}><Icon name="sparkle" size={16} />逐条提交 · {yuan(totalYuan)}</button>
         </div>
       </div>
     </Drawer>

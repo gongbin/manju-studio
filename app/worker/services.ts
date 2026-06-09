@@ -48,6 +48,7 @@ export async function advanceTask(db: Db, env: Env, taskId: string, teamId: stri
   const isEnhance = t.cap === 'video-enhance';
   let next = t.progress;
   let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';
+  let videoUrl: string | null = null;
 
   // Real provider path
   if (env.VOLC_ARK_API_KEY && !isEnhance && t.ptid) {
@@ -55,6 +56,7 @@ export async function advanceTask(db: Db, env: Env, taskId: string, teamId: stri
       const pt = await registry.videoProvider()!.getTask(t.ptid, env);
       state = pt.state;
       next = pt.progress ?? next;
+      if (pt.videoUrl) videoUrl = pt.videoUrl;
     } catch (e) {
       state = 'failed';
       await db.update(S.generationTasks).set({ state, error: String(e), updated: now() }).where(eq(S.generationTasks.id, taskId));
@@ -68,14 +70,17 @@ export async function advanceTask(db: Db, env: Env, taskId: string, teamId: stri
     else { next = Math.min(100, t.progress + Math.round(7 + Math.random() * 12)); state = next >= 100 ? 'succeeded' : 'running'; }
   }
 
-  await db.update(S.generationTasks).set({ state, progress: next, updated: now() }).where(eq(S.generationTasks.id, taskId));
+  // On success, surface the generated video URL keyed by the (provider) task id.
+  if (state === 'succeeded' && !isEnhance && !videoUrl) videoUrl = `https://demo.cdn/manju/${t.shot}.mp4`;
+
+  await db.update(S.generationTasks).set({ state, progress: next, ...(videoUrl ? { videoUrl } : {}), updated: now() }).where(eq(S.generationTasks.id, taskId));
 
   if (isEnhance) {
     const shot = await db.select().from(S.shots).where(eq(S.shots.id, t.shot)).get();
     const enh = shot?.enhance ?? { status: 'processing' as const };
     await db.update(S.shots).set({ enhance: { ...enh, status: state === 'succeeded' ? 'succeeded' : 'processing', progress: next }, updated: now() }).where(eq(S.shots.id, t.shot));
   } else {
-    await db.update(S.shots).set({ status: state === 'succeeded' ? 'generated' : 'running', progress: next, keyframe: true, updated: now() }).where(eq(S.shots.id, t.shot));
+    await db.update(S.shots).set({ status: state === 'succeeded' ? 'generated' : 'running', progress: next, keyframe: true, ...(videoUrl ? { videoUrl } : {}), updated: now() }).where(eq(S.shots.id, t.shot));
   }
 
   return state;

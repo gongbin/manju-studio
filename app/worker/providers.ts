@@ -42,6 +42,8 @@ export class VolcengineProvider implements VideoProvider {
 
     const content: unknown[] = [{ type: 'text', text: this.composePrompt(input.prompt) }];
     for (const url of input.references?.images ?? []) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
+    for (const url of input.references?.videos ?? []) content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
+    for (const url of input.references?.audios ?? []) content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
     if (input.references?.characterAssetId) {
       const id = input.references.characterAssetId.startsWith('asset://') ? input.references.characterAssetId : `asset://${input.references.characterAssetId}`;
       content.push({ type: 'image_url', image_url: { url: id }, role: 'reference_image' });

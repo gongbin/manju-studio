@@ -209,7 +209,7 @@ function SceneRows({ sc, shots, sel, toggle, update, openGenerate, setEnhShot }:
                 items={[
                   ['draft', 'failed'].includes(s.status) ? { icon: 'sparkle', label: '提交生成', onClick: () => openGenerate([s.id]) } : null,
                   s.status === 'failed' ? { icon: 'retry', label: '重试', onClick: () => openGenerate([s.id]) } : null,
-                  s.status === 'generated' ? { icon: 'download', label: '下载视频' } : null,
+                  s.status === 'generated' ? { icon: 'download', label: '下载视频', onClick: () => s.videoUrl && window.open(s.videoUrl, '_blank') } : null,
                   s.status === 'generated' ? { icon: 'bolt', label: s.enhance?.status === 'succeeded' ? '重新增强' : '视频增强', onClick: () => setEnhShot(s) } : null,
                   s.status === 'generated' ? { icon: 'mic', label: 'TTS 配音' } : null,
                   { icon: 'copy', label: '复制镜头' },
@@ -247,7 +247,7 @@ function ShotCard({ s, sel, toggle, openGenerate, setEnhShot }: { s: Shot; sel: 
           {['draft', 'failed'].includes(s.status)
             ? <button className="btn btn-pri btn-sm grow" onClick={() => openGenerate([s.id])}><Icon name={s.status === 'failed' ? 'retry' : 'sparkle'} size={13} />{s.status === 'failed' ? '重试' : '生成'}</button>
             : s.status === 'generated'
-              ? <><button className="btn btn-soft btn-sm grow"><Icon name="download" size={13} />下载</button><button className="btn btn-ghost btn-sm btn-icon" title="视频增强" onClick={() => setEnhShot(s)}><Icon name="bolt" size={15} /></button></>
+              ? <><button className="btn btn-soft btn-sm grow" onClick={() => s.videoUrl && window.open(s.videoUrl, '_blank')}><Icon name="download" size={13} />下载</button><button className="btn btn-ghost btn-sm btn-icon" title="视频增强" onClick={() => setEnhShot(s)}><Icon name="bolt" size={15} /></button></>
               : <button className="btn btn-soft btn-sm grow" disabled><Icon name="refresh" size={13} className="spin" />生成中 {s.progress || 0}%</button>}
           <button className="btn btn-ghost btn-sm btn-icon"><Icon name="more" size={15} /></button>
         </div>

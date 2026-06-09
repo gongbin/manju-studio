@@ -2,7 +2,7 @@
 // reachable (e.g. plain `vite dev` with no worker) it transparently falls back
 // to an in-memory store + polling simulation so the UI still works.
 import * as mock from './mock';
-import type { Asset, Character, Episode, GenerationTask, Project, Shot, Wallet, Capability } from './types';
+import type { Asset, Character, Episode, GenerationTask, Project, Shot, ShotRefs, Wallet, Capability } from './types';
 
 const API = '/api';
 let useMock: boolean | null = null;
@@ -83,20 +83,39 @@ export const api = {
     );
   },
 
-  async addAsset(data: { name: string; kind: Asset['kind']; ext: string; size: string; tone: string }): Promise<string> {
+  async addAsset(data: { name: string; kind: Asset['kind']; ext: string; size: string; tone: string; store?: string }): Promise<string> {
     return remoteOrLocal(
       async () => (await req<{ id: string }>('/assets', { method: 'POST', body: JSON.stringify(data) })).id,
       () => {
         const id = 'as_' + Math.random().toString(36).slice(2, 7);
-        store.assets = [{ id, name: data.name, kind: data.kind, ext: data.ext, tone: data.tone as never, store: 'R2', size: data.size, created: new Date().toISOString() }, ...store.assets];
+        store.assets = [{ id, name: data.name, kind: data.kind, ext: data.ext, tone: data.tone as never, store: data.store ?? 'R2', size: data.size, created: new Date().toISOString() }, ...store.assets];
         return id;
       },
     );
   },
 
-  async submitGenerate(shotIds: string[], params: { model: string }, total: number) {
+  async deleteCharacter(id: string) {
     return remoteOrLocal(
-      () => req('/shots/generate', { method: 'POST', body: JSON.stringify({ ids: shotIds, model: params.model, total }) }),
+      () => req(`/characters/${id}`, { method: 'DELETE' }),
+      () => { store.characters = store.characters.filter((c) => c.id !== id); return { ok: true }; },
+    );
+  },
+
+  async deleteAsset(id: string) {
+    return remoteOrLocal(
+      () => req(`/assets/${id}`, { method: 'DELETE' }),
+      () => { store.assets = store.assets.filter((a) => a.id !== id); return { ok: true }; },
+    );
+  },
+
+  async submitGenerate(
+    shotIds: string[],
+    params: { model: string; resolution?: string; ratio?: string; duration?: number | 'smart'; generateAudio?: boolean; watermark?: boolean },
+    total: number,
+    refs?: Record<string, ShotRefs>,
+  ) {
+    return remoteOrLocal(
+      () => req('/shots/generate', { method: 'POST', body: JSON.stringify({ ids: shotIds, model: params.model, params, refs, total }) }),
       () => { localGenerate(shotIds, params, total); return { ok: true }; },
     );
   },
@@ -143,7 +162,7 @@ export function startSimulation() {
       if (tk.state === 'running') {
         const np = Math.min(100, (tk.progress || 0) + 7 + Math.random() * 11);
         const enh = tk.cap === 'video-enhance';
-        if (np >= 100) { shotPatch[tk.shot] = enh ? { __enh: { status: 'succeeded', progress: 100 } } : { status: 'generated', progress: 100, keyframe: true }; return { ...tk, state: 'succeeded' as const, progress: 100 }; }
+        if (np >= 100) { shotPatch[tk.shot] = enh ? { __enh: { status: 'succeeded', progress: 100 } } : { status: 'generated', progress: 100, keyframe: true, videoUrl: `https://demo.cdn/manju/${tk.shot}.mp4` }; return { ...tk, state: 'succeeded' as const, progress: 100, videoUrl: enh ? tk.videoUrl : `https://demo.cdn/manju/${tk.shot}.mp4` }; }
         shotPatch[tk.shot] = enh ? { __enh: { status: 'processing', progress: Math.round(np) } } : { status: 'running', progress: Math.round(np) };
         return { ...tk, progress: Math.round(np) };
       }

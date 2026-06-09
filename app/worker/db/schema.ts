@@ -1,7 +1,7 @@
 // Drizzle schema for Cloudflare D1 (SQLite). Mirrors docs/TECH_DESIGN.md §5.
 // JSON-shaped columns use { mode: 'json' } so the ORM (de)serializes them.
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import type { PromptFields, ShotParams, EnhanceState, TimeBeat } from '../../src/lib/types';
+import type { PromptFields, ShotParams, EnhanceState, TimeBeat, ShotRefs } from '../../src/lib/types';
 
 export const teams = sqliteTable('teams', {
   id: text('id').primaryKey(),
@@ -97,6 +97,8 @@ export const shots = sqliteTable('shots', {
   prompt: text('prompt', { mode: 'json' }).$type<PromptFields>().notNull(),
   params: text('params', { mode: 'json' }).$type<ShotParams>().notNull(),
   beats: text('beats', { mode: 'json' }).$type<TimeBeat[] | null>(),
+  refs: text('refs', { mode: 'json' }).$type<ShotRefs | null>(),
+  videoUrl: text('video_url'),
   enhance: text('enhance', { mode: 'json' }).$type<EnhanceState | null>(),
   updated: text('updated').notNull(),
 });
@@ -116,6 +118,7 @@ export const generationTasks = sqliteTable('generation_tasks', {
   cost: integer('cost').notNull().default(0),
   by: text('by_user'),
   error: text('error'),
+  videoUrl: text('video_url'),
   created: text('created').notNull(),
   updated: text('updated').notNull(),
 });

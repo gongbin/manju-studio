@@ -96,6 +96,13 @@ export interface TimeBeat {
   action: string;
 }
 
+/** Per-shot reference material — each shot/scene uploads its own (注入 reference_*)。 */
+export interface ShotRefs {
+  images: string[];
+  videos: string[];
+  audios: string[];
+}
+
 export interface EnhanceState {
   status: 'idle' | 'queued' | 'processing' | 'succeeded' | 'failed';
   type?: string;
@@ -118,6 +125,8 @@ export interface Shot {
   prompt: PromptFields;
   params: ShotParams;
   beats?: TimeBeat[];
+  refs?: ShotRefs;
+  videoUrl?: string | null;
   enhance?: EnhanceState;
 }
 
@@ -134,6 +143,7 @@ export interface GenerationTask {
   by: string;
   created: string;
   ptid: string;
+  videoUrl?: string | null;
   error?: string;
 }
 

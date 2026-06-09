@@ -116,6 +116,17 @@ api.post('/api/assets', async (c) => {
   return c.json({ id });
 });
 
+api.patch('/api/characters/:id', async (c) => {
+  const id = c.req.param('id');
+  const d = await c.req.json<{ name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean }>();
+  const db = getDb(c.env);
+  const existing = await db.select().from(S.characters).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID))).get();
+  const asset = d.asset ? (existing?.asset || `asset://qm/${id}`) : '';
+  await db.update(S.characters).set({ name: d.name, tag: d.tag, tone: d.tone, voice: d.voice, desc: d.desc, asset }).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'character.update', target: d.name, diff: '编辑角色' });
+  return c.json({ ok: true });
+});
+
 api.delete('/api/characters/:id', async (c) => {
   const id = c.req.param('id');
   const db = getDb(c.env);

@@ -22,12 +22,25 @@ export interface StorageSettings {
   tosBucket: string;
   tosRegion: string;
 }
+export interface GeneralSettings {
+  workspaceName: string;
+  locale: 'zh-CN' | 'en-US';
+  timezone: string;
+}
+/** Non-secret config for a pluggable LLM/TTS provider (key is encrypted server-side). */
+export interface ProviderConfig {
+  baseUrl: string;
+  model: string;
+}
 export interface Settings {
+  general: GeneralSettings;
   defaults: GenDefaults;
   storage: StorageSettings;
+  providers: { llm: ProviderConfig; tts: ProviderConfig };
   creditsPerYuan: number;           // 100 → 1 积分 = ¥0.01
   pricing: Record<string, PricingRule>;
 }
+export type ProviderKey = keyof Settings['providers'];
 
 const RES_MULT = { '480p': 0.4, '720p': 0.7, '1080p': 1, '2K': 1.6, '4K': 2.2 };
 function defaultPricing(): Record<string, PricingRule> {
@@ -38,8 +51,13 @@ function defaultPricing(): Record<string, PricingRule> {
   };
 }
 const DEFAULTS: Settings = {
+  general: { workspaceName: '青冥工作室', locale: 'zh-CN', timezone: 'Asia/Shanghai' },
   defaults: { model: 'seedance-2.0', resolution: '480p', ratio: 'adaptive', duration: 'smart', generateAudio: true, watermark: true },
   storage: { backend: 'r2', tosBucket: 'manju-assets', tosRegion: 'cn-beijing' },
+  providers: {
+    llm: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
+    tts: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1' },
+  },
   creditsPerYuan: 100,
   pricing: defaultPricing(),
 };
@@ -54,8 +72,10 @@ function load(): Settings {
     const p = JSON.parse(raw) as Partial<Settings>;
     return {
       ...DEFAULTS, ...p,
+      general: { ...DEFAULTS.general, ...p.general },
       defaults: { ...DEFAULTS.defaults, ...p.defaults },
       storage: { ...DEFAULTS.storage, ...p.storage },
+      providers: { llm: { ...DEFAULTS.providers.llm, ...p.providers?.llm }, tts: { ...DEFAULTS.providers.tts, ...p.providers?.tts } },
       pricing: { ...defaultPricing(), ...(p.pricing ?? {}) },
     };
   } catch { return clone(DEFAULTS); }
@@ -72,8 +92,10 @@ function commit(next: Settings) {
 export const settingsStore = {
   get: () => state,
   subscribe: (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; },
+  setGeneral: (patch: Partial<GeneralSettings>) => commit({ ...state, general: { ...state.general, ...patch } }),
   setDefaults: (patch: Partial<GenDefaults>) => commit({ ...state, defaults: { ...state.defaults, ...patch } }),
   setStorage: (patch: Partial<StorageSettings>) => commit({ ...state, storage: { ...state.storage, ...patch } }),
+  setProvider: (key: ProviderKey, patch: Partial<ProviderConfig>) => commit({ ...state, providers: { ...state.providers, [key]: { ...state.providers[key], ...patch } } }),
   setCreditsPerYuan: (n: number) => commit({ ...state, creditsPerYuan: Math.max(1, n || 1) }),
   setRule: (modelId: string, patch: Partial<PricingRule>) => commit({ ...state, pricing: { ...state.pricing, [modelId]: { ...ruleFor(state, modelId), ...patch } } }),
   setResMult: (modelId: string, res: string, mult: number) => {

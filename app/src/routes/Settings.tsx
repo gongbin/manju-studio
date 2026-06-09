@@ -4,10 +4,15 @@ import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
 import { Switch } from '@/ui/controls';
 import { Modal } from '@/ui/dialog';
-import { Empty } from '@/ui/primitives';
 import { toast } from '@/ui/toast';
 import { models } from '@/lib/mock';
+import { useTheme } from '@/theme';
 import { useSettings, settingsStore, ruleFor, priceYuan, yuanToCredits } from '@/lib/settings';
+import type { ProviderKey } from '@/lib/settings';
+
+const ACCENTS: [string, string][] = [['orange', '#e8623d'], ['violet', '#7c5cf0'], ['blue', '#3b7ff0'], ['teal', '#16a394']];
+const LOCALES: [string, string][] = [['zh-CN', '简体中文'], ['en-US', 'English']];
+const TIMEZONES = ['Asia/Shanghai', 'Asia/Tokyo', 'Asia/Singapore', 'Europe/London', 'America/Los_Angeles', 'America/New_York', 'UTC'];
 
 type Sec = 'general' | 'providers' | 'defaults' | 'storage' | 'billing' | 'deploy';
 const SECS: [Sec, string, string][] = [
@@ -15,25 +20,64 @@ const SECS: [Sec, string, string][] = [
   ['defaults', '默认生成参数', 'film'], ['storage', '素材存储', 'layers'], ['billing', '计费规则', 'coins'], ['deploy', '部署', 'bolt'],
 ];
 
-interface CredModal { plane: 'data' | 'control'; name?: string }
+interface CredModal { plane: 'data' | 'control'; provider?: ProviderKey; name?: string }
 
 function chip(on: boolean) {
   return { height: 28, cursor: 'pointer', background: on ? 'var(--accent-soft)' : undefined, borderColor: on ? 'var(--accent-line)' : undefined, color: on ? 'var(--accent-text)' : undefined } as const;
 }
 const VIDEO_MODELS = models.filter((m) => m.caps.includes('image-to-video') || m.caps.includes('text-to-video'));
 
+function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => void }) {
+  const s = useSettings();
+  const pk = cred.provider;
+  return (
+    <div style={{ width: 'min(460px, 94vw)' }}>
+      <div className="row gap10" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line)' }}>
+        <Icon name={cred.plane === 'control' ? 'lock' : 'cpu'} size={18} className="acc" />
+        <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : '控制面 · AK / SK')}</b><div className="faint" style={{ fontSize: 12 }}>{pk ? '配置 base_url / 模型名 / API Key · 支持第三方 / 自建端点' : cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'CV MediaKit 控制面签名')}</div></div>
+        <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+      </div>
+      <div style={{ padding: 18 }} className="col gap14">
+        {pk ? (
+          <>
+            <label><span className="lbl">Base URL（接口地址）</span><input className="field" value={s.providers[pk].baseUrl} onChange={(e) => settingsStore.setProvider(pk, { baseUrl: e.target.value })} placeholder="如：https://api.openai.com/v1" /></label>
+            <label><span className="lbl">模型名称 Model</span><input className="field" value={s.providers[pk].model} onChange={(e) => settingsStore.setProvider(pk, { model: e.target.value })} placeholder={pk === 'tts' ? '如：tts-1 / cosyvoice-v1' : '如：claude-sonnet-4-6 / gpt-4o'} /></label>
+            <label><span className="lbl">API Key</span><div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" placeholder="粘贴第三方 / 自建端点的 API Key" /></div></label>
+            <div className="faint" style={{ fontSize: 11 }}>兼容任意 OpenAI / Anthropic 风格端点（第三方代理或自建服务）；base_url 与模型名即时保存，密钥加密落库。</div>
+          </>
+        ) : cred.plane === 'data' ? (
+          <label><span className="lbl">API Key（数据面）</span>
+            <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" defaultValue="ak-volc-7f3a91d2c4b8e6f0" placeholder="粘贴 APIKey" /></div></label>
+        ) : (
+          <>
+            <label><span className="lbl">Access Key ID（AK）</span><div className="search" style={{ height: 38 }}><Icon name="users" size={15} className="faint" /><input defaultValue="AKLTN2QwM2I5N2f3a" /></div></label>
+            <label><span className="lbl">Secret Access Key（SK）</span><div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" defaultValue="N2EwYzhkZmM5MWI2ZTRkMA==" /></div></label>
+            <label><span className="lbl">区域 Region（可选）</span><input className="field" defaultValue="cn-beijing" /></label>
+          </>
+        )}
+        <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '9px 11px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={16} className="acc" /><span>密钥提交后经 AES-GCM 加密落库，仅 Owner / Admin 可写，调用瞬间于服务端内存解密，<b>前端永不回明文</b>。</span></div>
+      </div>
+      <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
+        <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
+        <button className="btn btn-pri grow" onClick={() => { onClose(); toast('凭据已加密保存', 'lock'); }}><Icon name="check" size={15} />加密保存</button>
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
   const [sec, setSec] = useState<Sec>('providers');
   const [cred, setCred] = useState<CredModal | null>(null);
   const s = useSettings();
+  const { theme, accent, density, setTheme, setAccent, setDensity } = useTheme();
   const def = s.defaults;
   const defModel = models.find((m) => m.id === def.model) || models[0];
   const DUR_OPTS: (number | 'smart')[] = ['smart', ...[3, 4, 5, 6, 8, 10, 12].filter((d) => d >= defModel.dur[0] && d <= defModel.dur[1])];
 
   return (
     <Screen crumb={<Crumb parts={[{ label: '工作空间设置' }]} />}>
-      <div className="page" style={{ display: 'grid', gridTemplateColumns: '190px 1fr', gap: 26, maxWidth: 1100 }}>
-        <div className="col gap2" style={{ position: 'sticky', top: 0, alignSelf: 'start' }}>
+      <div className="page settings-grid" style={{ display: 'grid', gridTemplateColumns: '190px 1fr', gap: 26, maxWidth: 1100 }}>
+        <div className="col gap2 settings-nav" style={{ position: 'sticky', top: 0, alignSelf: 'start' }}>
           <div className="page-title" style={{ marginBottom: 12 }}>设置</div>
           {SECS.map(([k, l, ic]) => <a key={k} className={'nav-item' + (sec === k ? ' active' : '')} onClick={() => setSec(k)}><Icon name={ic} size={16} />{l}</a>)}
         </div>
@@ -61,15 +105,19 @@ export function Settings() {
                 </div>
               </div>
 
-              {[{ fam: 'LLM 文案', name: 'Anthropic · Claude', prov: 'anthropic' }, { fam: 'TTS 配音', name: 'OpenAI 兼容 · 自建 TTS', prov: 'openai-compatible' }].map((c, i) => (
-                <div key={i} className="card" style={{ padding: 14 }}>
-                  <div className="row gap12">
-                    <span className="av" style={{ width: 34, height: 34, background: 'var(--surface-4)', color: 'var(--text-3)' }}><Icon name="cpu" size={16} /></span>
-                    <div className="grow"><div className="row gap8"><b style={{ fontSize: 14 }}>{c.name}</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>{c.fam}</span></div><div className="mono faint" style={{ fontSize: 11, marginTop: 3 }}>{c.prov} · 单 API Key · 未配置</div></div>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data', name: c.name })}>配置</button>
+              {([{ key: 'llm', fam: 'LLM 文案', name: 'LLM · Anthropic / OpenAI 兼容端点' }, { key: 'tts', fam: 'TTS 配音', name: 'TTS · OpenAI 兼容 / 自建 / 第三方' }] as const).map((c) => {
+                const cfg = s.providers[c.key];
+                const ok = !!cfg.baseUrl && !!cfg.model;
+                return (
+                  <div key={c.key} className="card" style={{ padding: 14 }}>
+                    <div className="row gap12">
+                      <span className="av" style={{ width: 34, height: 34, background: 'var(--surface-4)', color: 'var(--text-3)' }}><Icon name="cpu" size={16} /></span>
+                      <div className="grow"><div className="row gap8"><b style={{ fontSize: 14 }}>{c.name}</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>{c.fam}</span>{ok && <span className="tag" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>{cfg.model}</span>}</div><div className="mono faint" style={{ fontSize: 11, marginTop: 3 }}>{cfg.baseUrl || '未设置 base_url'} · 第三方 / 自建端点 base_url 与模型名可自定义</div></div>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'data', provider: c.key, name: c.name })}>配置</button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <div className="row gap8" style={{ fontSize: 12, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={15} className="acc" />凭据读写均记入审计日志。运行时仅在 Provider 调用瞬间于内存解密。</div>
             </>
           )}
@@ -182,38 +230,45 @@ export function Settings() {
           )}
 
           {sec === 'general' && (
-            <Empty icon="settings" title="通用设置" sub="品牌、空间名称、语言与时区等在此配置（演示中略）。" />
+            <>
+              <div><div style={{ fontWeight: 700, fontSize: 17 }}>通用设置</div><div className="muted" style={{ fontSize: 13, marginTop: 3 }}>工作空间名称、外观主题、语言与时区。</div></div>
+              <div className="card col gap14" style={{ padding: 16 }}>
+                <label><span className="lbl">工作空间名称</span><input className="field" value={s.general.workspaceName} onChange={(e) => settingsStore.setGeneral({ workspaceName: e.target.value })} placeholder="如：青冥工作室" /></label>
+                <div className="hr" />
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>界面主题</span>
+                  <div className="seg">{[['dark', '深色'], ['light', '浅色']].map(([k, l]) => <button key={k} className={theme === k ? 'on' : ''} onClick={() => setTheme(k as 'dark' | 'light')}>{l}</button>)}</div>
+                </div>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>强调色</span>
+                  <div className="row gap8">{ACCENTS.map(([k, col]) => (
+                    <button key={k} onClick={() => setAccent(k as never)} title={k} style={{ width: 26, height: 26, borderRadius: '50%', background: col, cursor: 'pointer', border: '2px solid ' + (accent === k ? 'var(--text)' : 'transparent'), boxShadow: accent === k ? '0 0 0 2px var(--bg) inset' : undefined }} />
+                  ))}</div>
+                </div>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>界面密度</span>
+                  <div className="seg">{[['compact', '紧凑'], ['regular', '标准'], ['comfy', '宽松']].map(([k, l]) => <button key={k} className={density === k ? 'on' : ''} onClick={() => setDensity(k as never)}>{l}</button>)}</div>
+                </div>
+                <div className="hr" />
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>默认语言</span>
+                  <Menu align="end" trigger={<button className="tag" style={{ height: 28, cursor: 'pointer' }}>{LOCALES.find(([k]) => k === s.general.locale)?.[1]}<Icon name="chevDown" size={12} /></button>}
+                    items={LOCALES.map(([k, l]) => ({ icon: k === s.general.locale ? 'check' : 'type', label: l, onClick: () => settingsStore.setGeneral({ locale: k as 'zh-CN' | 'en-US' }) }))} />
+                </div>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 13 }}>时区</span>
+                  <Menu align="end" trigger={<button className="tag mono" style={{ height: 28, cursor: 'pointer' }}>{s.general.timezone}<Icon name="chevDown" size={12} /></button>}
+                    items={TIMEZONES.map((tz) => ({ icon: tz === s.general.timezone ? 'check' : 'clock', label: tz, onClick: () => settingsStore.setGeneral({ timezone: tz }) }))} />
+                </div>
+              </div>
+              <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="info" size={15} className="acc" />主题 / 强调色 / 密度即时生效并本地保存；工作空间名称用于品牌展示。</div>
+            </>
           )}
         </div>
       </div>
 
       <Modal open={!!cred} onClose={() => setCred(null)}>
-        {cred && (
-          <div style={{ width: 'min(440px, 94vw)' }}>
-            <div className="row gap10" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line)' }}>
-              <Icon name={cred.plane === 'data' ? 'cpu' : 'lock'} size={18} className="acc" />
-              <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : '控制面 · AK / SK')}</b><div className="faint" style={{ fontSize: 12 }}>{cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'CV MediaKit 控制面签名')}</div></div>
-              <button className="icon-btn" onClick={() => setCred(null)}><Icon name="x" size={18} /></button>
-            </div>
-            <div style={{ padding: 18 }} className="col gap14">
-              {cred.plane === 'data' ? (
-                <label><span className="lbl">API Key（数据面）</span>
-                  <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" defaultValue="ak-volc-7f3a91d2c4b8e6f0" placeholder="粘贴 APIKey" /></div></label>
-              ) : (
-                <>
-                  <label><span className="lbl">Access Key ID（AK）</span><div className="search" style={{ height: 38 }}><Icon name="users" size={15} className="faint" /><input defaultValue="AKLTN2QwM2I5N2f3a" /></div></label>
-                  <label><span className="lbl">Secret Access Key（SK）</span><div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" defaultValue="N2EwYzhkZmM5MWI2ZTRkMA==" /></div></label>
-                  <label><span className="lbl">区域 Region（可选）</span><input className="field" defaultValue="cn-beijing" /></label>
-                </>
-              )}
-              <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '9px 11px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={16} className="acc" /><span>提交后经 AES-GCM 加密落库，仅 Owner / Admin 可写，调用瞬间于服务端内存解密，<b>前端永不回明文</b>。</span></div>
-            </div>
-            <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
-              <button className="btn btn-ghost grow" onClick={() => setCred(null)}>取消</button>
-              <button className="btn btn-pri grow" onClick={() => { setCred(null); toast('凭据已加密保存', 'lock'); }}><Icon name="check" size={15} />加密保存</button>
-            </div>
-          </div>
-        )}
+        {cred && <CredentialBody cred={cred} onClose={() => setCred(null)} />}
       </Modal>
     </Screen>
   );

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Icon } from '@/ui/icon';
@@ -13,6 +13,9 @@ import { fmt } from '@/lib/format';
 import { useAccount } from '@/lib/account';
 import { team, wallet as walletSeed, ROLE_LABEL } from '@/lib/mock';
 import { AccountSettingsModal, MyPermissionsModal } from './UserModals';
+
+const MobileNavCtx = createContext<{ open: boolean; setOpen: (v: boolean) => void }>({ open: false, setOpen: () => {} });
+const useMobileNav = () => useContext(MobileNavCtx);
 
 interface NavItem { id: string; label: string; icon: string; to: string }
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -31,7 +34,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
 ];
 
 function Sidebar() {
-  const go = useGo();
+  const navigate = useGo();
+  const { setOpen } = useMobileNav();
+  const go = (to: string, params?: Record<string, string>) => { setOpen(false); navigate(to, params); };
   const acct = useAccount();
   const [modal, setModal] = useState<null | 'account' | 'perms'>(null);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -118,8 +123,10 @@ function Sidebar() {
 export function Topbar({ children }: { children?: ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const acct = useAccount();
+  const { setOpen } = useMobileNav();
   return (
     <header className="topbar">
+      <button className="icon-btn nav-burger" title="菜单" onClick={() => setOpen(true)}><Icon name="menu" size={18} /></button>
       <div className="grow" style={{ minWidth: 0 }}>{children}</div>
       <div className="search" style={{ width: 230 }}>
         <Icon name="search" size={15} />
@@ -173,13 +180,17 @@ export function Screen({ crumb, children }: { crumb?: ReactNode; children: React
 }
 
 export function ShellLayout() {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="app">
-      <Sidebar />
-      <div className="main-col">
-        <Outlet />
+    <MobileNavCtx.Provider value={{ open, setOpen }}>
+      <div className={'app' + (open ? ' nav-open' : '')}>
+        <Sidebar />
+        <div className="main-col">
+          <Outlet />
+        </div>
+        <div className="rail-scrim" onClick={() => setOpen(false)} />
+        <Toaster />
       </div>
-      <Toaster />
-    </div>
+    </MobileNavCtx.Provider>
   );
 }

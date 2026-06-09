@@ -96,6 +96,18 @@ export const api = {
     );
   },
 
+  async updateCharacter(id: string, data: { name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean }) {
+    return remoteOrLocal(
+      () => req(`/characters/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+      () => {
+        store.characters = store.characters.map((c) => (c.id === id
+          ? { ...c, name: data.name, tag: data.tag, tone: data.tone as never, voice: data.voice, desc: data.desc, asset: data.asset ? (c.asset || `asset://qm/${id}`) : '' }
+          : c));
+        return { ok: true };
+      },
+    );
+  },
+
   async deleteCharacter(id: string) {
     return remoteOrLocal(
       () => req(`/characters/${id}`, { method: 'DELETE' }),

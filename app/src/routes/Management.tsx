@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
@@ -13,7 +13,7 @@ import { fmt } from '@/lib/format';
 import { characters as charSeed, assets as assetSeed, members as memberSeed, projects as projectSeed, audit, ROLE_LABEL, nameOf, wallet as walletSeed } from '@/lib/mock';
 import { useSettings, settingsStore, STORAGE_LABEL, STORAGE_SHORT } from '@/lib/settings';
 import { PERMS, PERM_LABEL, ROLE_PERMS, ROLE_DESC, effectiveRole } from '@/lib/rbac';
-import type { Asset, Member, Role } from '@/lib/types';
+import type { Asset, Character, Member, Role } from '@/lib/types';
 
 const TONES: [string, string][] = [['b', '青紫'], ['a', '暗棕'], ['c', '暖褐'], ['d', '青绿']];
 const TAGS = ['男主', '女主', '配角', '反派', '群演'];
@@ -22,7 +22,7 @@ function chipStyle(on: boolean) {
 }
 
 /* ---------------- Characters ---------------- */
-function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function NewCharacterModal({ open, editing, onClose }: { open: boolean; editing?: Character | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState('');
   const [tag, setTag] = useState('配角');
@@ -30,21 +30,29 @@ function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [voice, setVoice] = useState('');
   const [desc, setDesc] = useState('');
   const [asset, setAsset] = useState(true);
-  const reset = () => { setName(''); setTag('配角'); setTone('b'); setVoice(''); setDesc(''); setAsset(true); };
+  useEffect(() => {
+    if (!open) return;
+    setName(editing?.name ?? '');
+    setTag(editing?.tag ?? '配角');
+    setTone(editing?.tone ?? 'b');
+    setVoice(editing?.voice ?? '');
+    setDesc(editing?.desc ?? '');
+    setAsset(editing ? !!editing.asset : true);
+  }, [open, editing]);
   const submit = async () => {
     if (!name.trim()) return;
-    await api.addCharacter({ name: name.trim(), tag, tone, voice: voice.trim() || '未设定', desc: desc.trim(), asset });
+    const data = { name: name.trim(), tag, tone, voice: voice.trim() || '未设定', desc: desc.trim(), asset };
+    if (editing) { await api.updateCharacter(editing.id, data); toast('已更新角色 · ' + name.trim(), 'check'); }
+    else { await api.addCharacter(data); toast('已新建角色 · ' + name.trim(), 'users'); }
     qc.invalidateQueries({ queryKey: ['characters'] });
-    toast('已新建角色 · ' + name.trim(), 'users');
-    reset();
     onClose();
   };
   return (
     <Modal open={open} onClose={onClose}>
       <div style={{ width: 'min(520px, 94vw)' }}>
         <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
-          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="users" size={17} /></span>
-          <div className="grow"><b style={{ fontSize: 15 }}>新建角色</b><div className="faint" style={{ fontSize: 12 }}>角色卡 + 一致性资产，跨集跨镜头复用</div></div>
+          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name={editing ? 'edit' : 'users'} size={17} /></span>
+          <div className="grow"><b style={{ fontSize: 15 }}>{editing ? '编辑角色' : '新建角色'}</b><div className="faint" style={{ fontSize: 12 }}>角色卡 + 一致性资产，跨集跨镜头复用</div></div>
           <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
         </div>
         <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap16">
@@ -63,7 +71,7 @@ function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => vo
         </div>
         <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
           <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-          <button className="btn btn-pri grow" disabled={!name.trim()} onClick={submit}><Icon name="plus" size={15} />新建角色</button>
+          <button className="btn btn-pri grow" disabled={!name.trim()} onClick={submit}><Icon name={editing ? 'check' : 'plus'} size={15} />{editing ? '保存修改' : '新建角色'}</button>
         </div>
       </div>
     </Modal>
@@ -73,6 +81,7 @@ function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => vo
 export function Characters() {
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
+  const [editing, setEditing] = useState<Character | null>(null);
   const { data: characters = [] } = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters, initialData: charSeed });
   const del = async (id: string, name: string) => {
     if (!window.confirm(`确认删除角色「${name}」？该角色的一致性资产引用将被移除。`)) return;
@@ -93,7 +102,7 @@ export function Characters() {
                   {c.asset && <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="link" size={11} />一致性</span>}
                   <span className="tag" style={{ height: 21 }}>{c.tag}</span>
                   <Menu align="end" trigger={<button className="icon-btn" style={{ width: 24, height: 24, background: 'var(--scrim-2, rgba(0,0,0,.4))' }}><Icon name="more" size={14} /></button>}
-                    items={[{ icon: 'edit', label: '编辑角色' }, { sep: true }, { icon: 'trash', label: '删除角色', danger: true, onClick: () => del(c.id, c.name) }]} />
+                    items={[{ icon: 'edit', label: '编辑角色', onClick: () => setEditing(c) }, { sep: true }, { icon: 'trash', label: '删除角色', danger: true, onClick: () => del(c.id, c.name) }]} />
                 </div>
               </div>
               <div style={{ padding: 13 }}>
@@ -107,6 +116,7 @@ export function Characters() {
         </div>
       </div>
       <NewCharacterModal open={showNew} onClose={() => setShowNew(false)} />
+      <NewCharacterModal open={!!editing} editing={editing} onClose={() => setEditing(null)} />
     </Screen>
   );
 }

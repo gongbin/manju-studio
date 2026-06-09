@@ -12,10 +12,11 @@ const tokenFrom = (s: string) => { const t = s.trim(); const m = t.match(/[?&]in
 export function Login() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register' | 'invite'>('login');
-  const [email, setEmail] = useState('linshen@qm.studio');
+  const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
+  const [authErr, setAuthErr] = useState<string | null>(null);
 
   const [invite, setInvite] = useState<Invite | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -41,12 +42,31 @@ export function Login() {
     if (tk) { setMode('invite'); void loadInvite(tk); }
   }, []);
 
-  const enter = () => { void api.login(email); localStorage.setItem('ms.auth', '1'); navigate({ to: '/' }); };
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setAuthErr(null);
+    if (mode === 'login' && (!email.trim() || !pw)) { setAuthErr('请输入邮箱和密码'); return; }
+    if (mode === 'register' && (!email.trim() || pw.length < 6)) { setAuthErr('请输入邮箱，密码至少 6 位'); return; }
+    if (mode === 'invite' && pw.length < 6) { setAuthErr('请设置至少 6 位的登录密码'); return; }
     setBusy(true);
-    if (mode === 'invite' && token) { try { await api.acceptInvite(token, { name: name.trim() || undefined }); } catch { /* fall through */ } }
-    setTimeout(enter, 500);
+    try {
+      let res: { authorized?: boolean } | undefined;
+      if (mode === 'login') res = await api.login(email.trim(), pw);
+      else if (mode === 'register') res = await api.register({ email: email.trim(), password: pw, name: name.trim() || undefined });
+      else if (mode === 'invite' && token) res = await api.acceptInvite(token, { name: name.trim() || undefined, password: pw });
+      if (res && res.authorized === false) {
+        setAuthErr(mode === 'register'
+          ? '注册成功，但你的账号还需管理员邀请或授权后才能使用，请联系管理员。'
+          : '账号尚未获得授权，请联系管理员邀请或授权后再登录。');
+        setBusy(false);
+        return;
+      }
+      localStorage.setItem('ms.auth', '1');
+      navigate({ to: '/' });
+    } catch (e2) {
+      setAuthErr(e2 instanceof Error ? e2.message : '操作失败，请重试');
+      setBusy(false);
+    }
   };
 
   const daysLeft = invite ? Math.max(0, Math.ceil((new Date(invite.expiresAt).getTime() - Date.now()) / 864e5)) : 0;
@@ -122,23 +142,16 @@ export function Login() {
               <label><span className="lbl">邮箱</span>
                 <div className="search" style={{ height: 38 }}><Icon name="mail" size={16} className="faint" /><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@studio.com" type="email" readOnly={mode === 'invite'} /></div>
               </label>
-              <label><span className="lbl">{mode === 'invite' ? '设置登录密码' : '密码'}</span>
-                <div className="search" style={{ height: 38 }}><Icon name="lock" size={16} className="faint" /><input value={pw} onChange={(e) => setPw(e.target.value)} type="password" placeholder={mode === 'invite' ? '为账户设置密码' : ''} />{mode === 'login' && <a className="acc" style={{ fontSize: 12, fontWeight: 600 }}>忘记？</a>}</div>
+              <label><span className="lbl">{mode === 'login' ? '密码' : '设置登录密码'}</span>
+                <div className="search" style={{ height: 38 }}><Icon name="lock" size={16} className="faint" /><input value={pw} onChange={(e) => setPw(e.target.value)} type="password" placeholder={mode === 'login' ? '输入密码' : '至少 6 位'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></div>
+                {mode !== 'login' && <span className="faint" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>密码至少 6 位，用于后续登录</span>}
               </label>
+              {authErr && <div className="row gap6" style={{ fontSize: 12.5, color: 'var(--st-failed)' }}><Icon name="warn" size={14} />{authErr}</div>}
               <button className="btn btn-pri" type="submit" style={{ height: 40, marginTop: 2 }} disabled={busy}>
                 {busy ? <Icon name="refresh" size={16} className="spin" /> : <Icon name={mode === 'invite' ? 'check' : 'arrowRight'} size={16} />}
                 {busy ? '正在进入…' : mode === 'login' ? '登录' : mode === 'invite' ? '接受邀请并加入' : '注册账户'}
               </button>
             </form>
-          )}
-
-          {mode !== 'invite' && (
-            <>
-              <div className="row gap12" style={{ margin: '18px 0', color: 'var(--text-3)', fontSize: 12 }}>
-                <span className="hr grow" />或<span className="hr grow" />
-              </div>
-              <button className="btn btn-ghost" style={{ width: '100%', height: 38 }} onClick={enter}><Icon name="github" size={16} /> 使用 GitHub 继续</button>
-            </>
           )}
 
           <div className="muted" style={{ textAlign: 'center', marginTop: 22, fontSize: 13 }}>

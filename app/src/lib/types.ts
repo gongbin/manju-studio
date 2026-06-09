@@ -15,7 +15,7 @@ export interface Member {
   role: Role;
   title: string;
   online: boolean;
-  status?: 'active' | 'invited';
+  status?: 'active' | 'invited' | 'pending';
   /** Per-project role overrides — project id → role (overrides workspace role). */
   projectRoles?: Record<string, Role>;
 }
@@ -187,6 +187,7 @@ export interface Asset {
   tone: Tone;
   store: string;
   size: string;
+  url?: string;
   created: string;
 }
 

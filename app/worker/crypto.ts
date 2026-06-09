@@ -31,3 +31,29 @@ export async function decryptSecret(encKey: string, blob: string): Promise<strin
     return td.decode(pt);
   } catch { return null; }
 }
+
+/* ---------------- password hashing (PBKDF2-SHA256) ---------------- */
+const PBKDF2_ITER = 100_000;
+async function pbkdf2(password: string, salt: Uint8Array, iterations: number): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
+  return b64(new Uint8Array(bits));
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await pbkdf2(password, salt, PBKDF2_ITER);
+  return `pbkdf2$${PBKDF2_ITER}$${b64(salt)}$${hash}`;
+}
+
+export async function verifyPassword(password: string, stored: string | null | undefined): Promise<boolean> {
+  if (!stored) return false;
+  const [scheme, iterS, saltB64, hashB64] = stored.split('$');
+  if (scheme !== 'pbkdf2' || !saltB64 || !hashB64) return false;
+  const hash = await pbkdf2(password, unb64(saltB64), parseInt(iterS, 10) || PBKDF2_ITER);
+  // constant-time compare
+  if (hash.length !== hashB64.length) return false;
+  let diff = 0;
+  for (let i = 0; i < hash.length; i++) diff |= hash.charCodeAt(i) ^ hashB64.charCodeAt(i);
+  return diff === 0;
+}

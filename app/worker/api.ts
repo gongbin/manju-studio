@@ -7,8 +7,9 @@ import * as S from './db/schema';
 import { seed, TEAM_ID } from './db/seed';
 import { audit, hold, ids, providerKey, refund } from './services';
 import { registry, runBreakdown } from './providers';
-import { encryptSecret, encKeyOf } from './crypto';
+import { encryptSecret, encKeyOf, hashPassword, verifyPassword } from './crypto';
 import { ensureSchema } from './ensure-schema';
+import type { Context } from 'hono';
 import { models as MODELS } from '../src/lib/mock';
 import type { BreakdownResult } from '../src/lib/breakdown';
 
@@ -34,17 +35,58 @@ const sessionUser = async (c: { env: Env; req: { raw: Request } }) => {
 
 const credentialKey = (env: Env, family: string) => providerKey(getDb(env), TEAM_ID, env, family);
 
-/* ---------------- auth ---------------- */
-api.post('/api/auth/login', async (c) => {
-  const { email } = await c.req.json<{ email?: string }>();
-  const db = getDb(c.env);
-  const user = email ? await db.select().from(S.users).where(eq(S.users.email, email)).get() : undefined;
-  const uid = user?.id ?? 'u_lin';
+async function startSession(c: Context<{ Bindings: Env }>, uid: string) {
   const sid = crypto.randomUUID();
   await c.env.SESSIONS.put(`sess:${sid}`, uid, { expirationTtl: 60 * 60 * 24 * 7 });
   setCookie(c, 'ms_sess', sid, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 60 * 60 * 24 * 7 });
-  await audit(db, TEAM_ID, { actor: uid, action: 'auth.login', target: email ?? '(demo)', diff: '登录' });
-  return c.json({ ok: true, userId: uid });
+}
+
+/* ---------------- auth ---------------- */
+// Authorization = an ACTIVE membership in the team. Self-registration creates a
+// 'pending' member with no access until an admin invites or approves them.
+const membershipOf = (db: ReturnType<typeof getDb>, uid: string) =>
+  db.select().from(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid))).get();
+
+api.post('/api/auth/login', async (c) => {
+  const { email, password } = await c.req.json<{ email?: string; password?: string }>();
+  if (!email?.trim() || !password) return c.json({ error: '请输入邮箱和密码' }, 400);
+  const db = getDb(c.env);
+  const user = await db.select().from(S.users).where(eq(S.users.email, email.trim())).get();
+  if (!user || !user.passwordHash) return c.json({ error: '账号不存在或尚未设置密码，请先注册' }, 401);
+  if (!(await verifyPassword(password, user.passwordHash))) return c.json({ error: '邮箱或密码错误' }, 401);
+  const mem = await membershipOf(db, user.id);
+  const authorized = mem?.status === 'active';
+  if (authorized) { await startSession(c, user.id); await audit(db, TEAM_ID, { actor: user.id, action: 'auth.login', target: email.trim(), diff: '登录' }); }
+  return c.json({ ok: true, authorized, userId: user.id });
+});
+
+api.post('/api/auth/register', async (c) => {
+  const { email, password, name } = await c.req.json<{ email?: string; password?: string; name?: string }>();
+  if (!email?.trim() || !/.+@.+\..+/.test(email.trim())) return c.json({ error: '请输入有效邮箱' }, 400);
+  if (!password || password.length < 6) return c.json({ error: '密码至少 6 位' }, 400);
+  const db = getDb(c.env);
+  const hash = await hashPassword(password);
+  const existing = await db.select().from(S.users).where(eq(S.users.email, email.trim())).get();
+  let uid: string;
+  if (existing) {
+    if (existing.passwordHash) return c.json({ error: '该邮箱已注册，请直接登录' }, 409);
+    // claim a pre-seeded / invited account (no password yet) by setting one.
+    uid = existing.id;
+    await db.update(S.users).set({ passwordHash: hash, name: name?.trim() || existing.name }).where(eq(S.users.id, uid));
+  } else {
+    // Bootstrap: the first account on a team with no active members becomes the owner.
+    const actives = await db.select().from(S.memberships).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.status, 'active'))).all();
+    const boot = actives.length === 0;
+    uid = 'u_' + Math.random().toString(36).slice(2, 8);
+    await db.insert(S.users).values({ id: uid, email: email.trim(), name: name?.trim() || email.trim().split('@')[0], role: boot ? 'owner' : 'creator', title: boot ? '主理人' : '注册用户', passwordHash: hash, createdAt: ids.now() });
+    // Without an invite/authorization → pending (admin approves). First-ever account → active owner.
+    await db.insert(S.memberships).values({ id: `mem_${uid}`, teamId: TEAM_ID, userId: uid, role: boot ? 'owner' : 'creator', status: boot ? 'active' : 'pending', projectRoles: {} });
+  }
+  const mem = await membershipOf(db, uid);
+  const authorized = mem?.status === 'active';
+  if (authorized) await startSession(c, uid);
+  await audit(db, TEAM_ID, { actor: uid, action: 'auth.register', target: email.trim(), diff: existing ? '设置密码并登录' : '注册（待管理员授权）' });
+  return c.json({ ok: true, authorized, userId: uid });
 });
 
 api.post('/api/auth/logout', async (c) => {
@@ -61,6 +103,18 @@ api.get('/api/auth/me', async (c) => {
   return c.json({ user: user ?? null });
 });
 
+// ---- Authorization guard: everything below requires an ACTIVE membership ----
+// (public: invite lookup/accept, R2 file serving, key-protected seed/migrate, health).
+api.use('/api/*', async (c, next) => {
+  const p = c.req.path;
+  if (p.startsWith('/api/files/') || p.startsWith('/api/invites/') || p === '/api/_seed' || p === '/api/_migrate' || p === '/api/health') return next();
+  const uid = await sessionUser(c);
+  if (!uid) return c.json({ error: '请先登录' }, 401);
+  const mem = await membershipOf(getDb(c.env), uid);
+  if (mem?.status !== 'active') return c.json({ error: '账号未授权，请联系管理员邀请或授权' }, 403);
+  return next();
+});
+
 /* ---------------- reads ---------------- */
 api.get('/api/projects', async (c) => c.json(await getDb(c.env).select().from(S.projects).where(eq(S.projects.teamId, TEAM_ID)).all()));
 api.get('/api/episodes', async (c) => c.json(await getDb(c.env).select().from(S.episodes).where(eq(S.episodes.teamId, TEAM_ID)).all()));
@@ -69,7 +123,7 @@ api.get('/api/scenes', async (c) => c.json(await getDb(c.env).select().from(S.sc
 api.get('/api/characters', async (c) => c.json(await getDb(c.env).select().from(S.characters).where(eq(S.characters.teamId, TEAM_ID)).all()));
 api.get('/api/assets', async (c) => {
   const rows = await getDb(c.env).select().from(S.assets).where(eq(S.assets.teamId, TEAM_ID)).orderBy(desc(S.assets.created)).all();
-  return c.json(rows.map((a) => ({ id: a.id, name: a.name ?? a.id, kind: a.kind ?? a.type, ext: a.ext ?? '', tone: a.tone ?? 'a', store: a.storeLabel ?? 'R2', size: a.sizeLabel ?? '', created: a.created })));
+  return c.json(rows.map((a) => ({ id: a.id, name: a.name ?? a.id, kind: a.kind ?? a.type, ext: a.ext ?? '', tone: a.tone ?? 'a', store: a.storeLabel ?? 'R2', size: a.sizeLabel ?? '', url: a.url ?? undefined, created: a.created })));
 });
 api.get('/api/members', async (c) => {
   const db = getDb(c.env);
@@ -121,11 +175,11 @@ api.post('/api/characters', async (c) => {
 });
 
 api.post('/api/assets', async (c) => {
-  const d = await c.req.json<{ name: string; kind: string; ext?: string; size?: string; tone?: string; store?: string; project?: string }>();
+  const d = await c.req.json<{ name: string; kind: string; ext?: string; size?: string; tone?: string; store?: string; url?: string; project?: string }>();
   const db = getDb(c.env);
   const id = 'as_' + Math.random().toString(36).slice(2, 7);
   const storeLabel = d.store ?? 'R2';
-  await db.insert(S.assets).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', type: d.kind, storage: storeLabel === 'TOS' ? 'tos' : 'r2', size: 0, name: d.name, kind: d.kind, ext: d.ext ?? '', tone: d.tone ?? 'a', storeLabel, sizeLabel: d.size ?? '', created: ids.now() });
+  await db.insert(S.assets).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', type: d.kind, storage: storeLabel === 'TOS' ? 'tos' : 'r2', url: d.url ?? null, size: 0, name: d.name, kind: d.kind, ext: d.ext ?? '', tone: d.tone ?? 'a', storeLabel, sizeLabel: d.size ?? '', created: ids.now() });
   await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.upload', target: d.name, diff: `上传素材 · ${d.kind} · ${storeLabel}` });
   return c.json({ id });
 });
@@ -159,6 +213,31 @@ api.delete('/api/assets/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- R2 upload + public serve (so 火山 Ark can fetch reference URLs) ----
+api.post('/api/upload', async (c) => {
+  const form = await c.req.formData();
+  const entry = form.get('file');
+  if (!entry || typeof entry === 'string') return c.json({ error: 'no file' }, 400);
+  const file = entry as unknown as File;
+  const dot = file.name.lastIndexOf('.');
+  const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : 'bin';
+  const key = `up/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${ext || 'bin'}`;
+  await c.env.ASSETS_BUCKET.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || 'application/octet-stream' } });
+  const url = `${new URL(c.req.url).origin}/api/files/${key}`;
+  return c.json({ url, key, name: file.name, size: file.size, type: file.type });
+});
+
+api.get('/api/files/*', async (c) => {
+  const key = decodeURIComponent(c.req.path.replace(/^\/api\/files\//, ''));
+  const obj = await c.env.ASSETS_BUCKET.get(key);
+  if (!obj) return c.json({ error: 'not found' }, 404);
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set('etag', obj.httpEtag);
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  return new Response(obj.body, { headers });
+});
+
 /* ---------------- members & RBAC ---------------- */
 api.post('/api/members', async (c) => {
   const d = await c.req.json<{ email: string; role: string; name?: string; title?: string }>();
@@ -184,18 +263,21 @@ api.get('/api/invites/:token', async (c) => {
 
 api.post('/api/invites/:token/accept', async (c) => {
   const token = c.req.param('token');
-  const d = await c.req.json<{ name?: string }>().catch(() => ({} as { name?: string }));
+  const d = await c.req.json<{ name?: string; password?: string }>().catch(() => ({} as { name?: string; password?: string }));
+  if (!d.password || d.password.length < 6) return c.json({ error: '请设置至少 6 位的登录密码' }, 400);
   const db = getDb(c.env);
   const inv = await db.select().from(S.invites).where(eq(S.invites.token, token)).get();
-  if (!inv) return c.json({ error: 'not found' }, 404);
-  await db.update(S.invites).set({ accepted: true }).where(eq(S.invites.token, token));
+  if (!inv) return c.json({ error: '邀请无效或不存在' }, 404);
+  if (inv.accepted) return c.json({ error: '该邀请已被接受' }, 409);
+  const hash = await hashPassword(d.password);
   const user = await db.select().from(S.users).where(eq(S.users.email, inv.email)).get();
-  if (user) {
-    if (d.name?.trim()) await db.update(S.users).set({ name: d.name.trim() }).where(eq(S.users.id, user.id));
-    await db.update(S.memberships).set({ status: 'active' }).where(and(eq(S.memberships.teamId, inv.teamId), eq(S.memberships.userId, user.id)));
-  }
-  await audit(db, inv.teamId, { actor: user?.id ?? inv.email, action: 'member.accept', target: inv.email, diff: '接受邀请加入工作空间' });
-  return c.json({ ok: true });
+  if (!user) return c.json({ error: '邀请用户不存在' }, 404);
+  await db.update(S.invites).set({ accepted: true }).where(eq(S.invites.token, token));
+  await db.update(S.users).set({ passwordHash: hash, ...(d.name?.trim() ? { name: d.name.trim() } : {}) }).where(eq(S.users.id, user.id));
+  await db.update(S.memberships).set({ status: 'active' }).where(and(eq(S.memberships.teamId, inv.teamId), eq(S.memberships.userId, user.id)));
+  await startSession(c, user.id);
+  await audit(db, inv.teamId, { actor: user.id, action: 'member.accept', target: inv.email, diff: '接受邀请并设置密码' });
+  return c.json({ ok: true, userId: user.id });
 });
 
 api.patch('/api/members/:id/project-role', async (c) => {
@@ -213,10 +295,14 @@ api.patch('/api/members/:id/project-role', async (c) => {
 
 api.patch('/api/members/:id', async (c) => {
   const uid = c.req.param('id');
-  const { role } = await c.req.json<{ role: string }>();
+  const { role, status } = await c.req.json<{ role?: string; status?: string }>();
   const db = getDb(c.env);
-  await db.update(S.memberships).set({ role }).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid)));
-  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'member.role', target: uid, diff: `工作空间角色 → ${role}` });
+  const set: Record<string, unknown> = {};
+  if (role) set.role = role;
+  if (status) set.status = status;
+  if (!Object.keys(set).length) return c.json({ ok: true });
+  await db.update(S.memberships).set(set).where(and(eq(S.memberships.teamId, TEAM_ID), eq(S.memberships.userId, uid)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: status ? 'member.status' : 'member.role', target: uid, diff: status ? `状态 → ${status}` : `工作空间角色 → ${role}` });
   return c.json({ ok: true });
 });
 

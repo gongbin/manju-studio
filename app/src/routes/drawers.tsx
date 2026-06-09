@@ -26,27 +26,35 @@ function Toggle({ on, set, label }: { on: boolean; set: (v: boolean) => void; la
   );
 }
 
-interface RefItem { name: string; kind: 'file' | 'url' }
+interface RefItem { label: string; url: string }
 function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
   icon: string; label: string; max: number; on: boolean; accept: string; multiple: boolean;
   items: RefItem[]; setItems: (v: RefItem[]) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
   const full = items.length >= max;
-  const addFiles = (fl: FileList | null) => {
+  const addFiles = async (fl: FileList | null) => {
     if (!fl) return;
-    const room = max - items.length;
-    setItems([...items, ...Array.from(fl).slice(0, room).map((f) => ({ name: f.name, kind: 'file' as const }))]);
+    const files = Array.from(fl).slice(0, max - items.length);
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      const uploaded: RefItem[] = [];
+      for (const f of files) { const r = await api.uploadFile(f); uploaded.push({ label: f.name, url: r.url }); }
+      setItems([...items, ...uploaded]);
+    } catch (e) { toast('上传失败：' + (e instanceof Error ? e.message : e), 'warn'); }
+    finally { setBusy(false); }
   };
   const addUrl = () => {
-    const u = window.prompt(`粘贴 ${label} URL`);
-    if (u && u.trim() && !full) setItems([...items, { name: u.trim(), kind: 'url' as const }]);
+    const u = window.prompt(`粘贴 ${label} URL（需可公开访问的 https 链接）`);
+    if (u && u.trim() && !full) setItems([...items, { label: u.trim(), url: u.trim() }]);
   };
   return (
     <div style={{ border: '1px dashed var(--line-2)', borderRadius: 10, padding: 9, opacity: on ? 1 : 0.45 }}>
-      <input ref={inputRef} type="file" accept={accept} multiple={multiple} style={{ display: 'none' }} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+      <input ref={inputRef} type="file" accept={accept} multiple={multiple} style={{ display: 'none' }} onChange={(e) => { void addFiles(e.target.files); e.target.value = ''; }} />
       <div className="center col gap3" style={{ color: 'var(--text-3)', padding: '4px 0 6px' }}>
-        <Icon name={icon} size={20} className={items.length ? 'acc' : ''} />
+        <Icon name={busy ? 'refresh' : icon} size={20} className={busy ? 'spin acc' : items.length ? 'acc' : ''} />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600 }}>{label}</span>
         <span className="faint" style={{ fontSize: 10 }}>{on ? `${items.length}/${max}` : `Max ${max} · 不支持`}</span>
       </div>
@@ -54,16 +62,16 @@ function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
         <div className="col gap3" style={{ marginBottom: 6 }}>
           {items.map((it, i) => (
             <div key={i} className="row gap4" style={{ fontSize: 10, padding: '2px 5px', background: 'var(--surface-2)', borderRadius: 5 }}>
-              <Icon name={it.kind === 'url' ? 'link' : 'check'} size={10} className="acc" />
-              <span className="grow ellipsis" title={it.name}>{it.name}</span>
+              <Icon name="check" size={10} className="acc" />
+              <span className="grow ellipsis" title={it.url}>{it.label}</span>
               <button className="icon-btn" style={{ width: 16, height: 16 }} onClick={() => setItems(items.filter((_, x) => x !== i))}><Icon name="x" size={10} /></button>
             </div>
           ))}
         </div>
       )}
       <div className="row gap4">
-        <button className="btn btn-soft" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full} onClick={() => inputRef.current?.click()}>Upload</button>
-        <button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full} onClick={addUrl}>URL</button>
+        <button className="btn btn-soft" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full || busy} onClick={() => inputRef.current?.click()}>{busy ? '上传中' : 'Upload'}</button>
+        <button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full || busy} onClick={addUrl}>URL</button>
       </div>
     </div>
   );
@@ -113,7 +121,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   };
 
   const submit = async () => {
-    const toUrls = (items: RefItem[]) => items.map((i) => (i.kind === 'url' ? i.name : `upload://${i.name}`));
+    const toUrls = (items: RefItem[]) => items.map((i) => i.url);
     const refsPayload: Record<string, ShotRefs> = {};
     for (const sh of shots) { const b = refs[sh.id] ?? emptyBuckets(); refsPayload[sh.id] = { images: toUrls(b.images), videos: toUrls(b.videos), audios: toUrls(b.audios) }; }
     for (const sh of shots) {

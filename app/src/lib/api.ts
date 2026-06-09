@@ -10,6 +10,12 @@ let useMock: boolean | null = null;
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...opts });
+  // Not logged in / not authorized → drop the client auth flag and bounce to login.
+  if (r.status === 401 || r.status === 403) {
+    try { localStorage.removeItem('ms.auth'); } catch { /* ignore */ }
+    if (typeof location !== 'undefined' && location.pathname !== '/login') location.href = '/login';
+    throw new Error(`${r.status}`);
+  }
   if (!r.ok) throw new Error(`${r.status}`);
   return (await r.json()) as T;
 }
@@ -17,6 +23,18 @@ async function remoteOrLocal<T>(remote: () => Promise<T>, local: () => T | Promi
   if (useMock === true) return local();
   try { const v = await remote(); useMock = false; return v; }
   catch { useMock = true; return local(); }
+}
+
+// Auth must NOT fall back to a fake "success" on an HTTP error (that's the
+// no-password bypass). Only a genuine network failure (no backend) → demo mode.
+async function authPost<T>(path: string, body: unknown): Promise<T> {
+  if (useMock === true) return { ok: true } as T;
+  let r: Response;
+  try { r = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) }); }
+  catch { useMock = true; return { ok: true } as T; }
+  useMock = false;
+  if (!r.ok) { const e = (await r.json().catch(() => ({}))) as { error?: string }; throw new Error(e.error || `登录失败 (${r.status})`); }
+  return (await r.json()) as T;
 }
 
 // ---- in-memory fallback store ----
@@ -35,10 +53,12 @@ const store = {
 };
 
 export type CredStatus = Record<string, { set: boolean; hint: string }>;
+export type AuthResult = { ok: boolean; authorized?: boolean; userId?: string };
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
 export const api = {
-  async login(email: string) { return remoteOrLocal(() => req('/auth/login', { method: 'POST', body: JSON.stringify({ email }) }), () => ({ ok: true })); },
+  async login(email: string, password: string) { return authPost<AuthResult>('/auth/login', { email, password }); },
+  async register(data: { email: string; password: string; name?: string }) { return authPost<AuthResult>('/auth/register', data); },
 
   async listProjects() { return remoteOrLocal(() => req<Project[]>('/projects'), () => clone(store.projects)); },
   async listEpisodes() { return remoteOrLocal(() => req<Episode[]>('/episodes'), () => clone(store.episodes)); },
@@ -48,6 +68,19 @@ export const api = {
   async listMembers() { return remoteOrLocal(() => req<Member[]>('/members'), () => clone(store.members)); },
   async listScenes() { return remoteOrLocal(() => req<Scene[]>('/scenes'), () => clone(store.scenes)); },
   async getCredentials() { return remoteOrLocal(() => req<CredStatus>('/credentials'), () => clone(store.creds)); },
+
+  async uploadFile(file: File): Promise<{ url: string; key: string; name: string; size: number; type: string }> {
+    const fd = new FormData();
+    fd.append('file', file);
+    return remoteOrLocal(
+      async () => {
+        const r = await fetch(API + '/upload', { method: 'POST', body: fd, credentials: 'include' });
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json() as Promise<{ url: string; key: string; name: string; size: number; type: string }>;
+      },
+      () => ({ url: `https://demo.local/${encodeURIComponent(file.name)}`, key: file.name, name: file.name, size: file.size, type: file.type }),
+    );
+  },
 
   async saveCredential(family: string, apiKey: string) {
     const hint = '••••' + apiKey.trim().slice(-4);
@@ -122,12 +155,12 @@ export const api = {
     );
   },
 
-  async addAsset(data: { name: string; kind: Asset['kind']; ext: string; size: string; tone: string; store?: string }): Promise<string> {
+  async addAsset(data: { name: string; kind: Asset['kind']; ext: string; size: string; tone: string; store?: string; url?: string }): Promise<string> {
     return remoteOrLocal(
       async () => (await req<{ id: string }>('/assets', { method: 'POST', body: JSON.stringify(data) })).id,
       () => {
         const id = 'as_' + Math.random().toString(36).slice(2, 7);
-        store.assets = [{ id, name: data.name, kind: data.kind, ext: data.ext, tone: data.tone as never, store: data.store ?? 'R2', size: data.size, created: new Date().toISOString() }, ...store.assets];
+        store.assets = [{ id, name: data.name, kind: data.kind, ext: data.ext, tone: data.tone as never, store: data.store ?? 'R2', size: data.size, url: data.url, created: new Date().toISOString() }, ...store.assets];
         return id;
       },
     );
@@ -180,18 +213,8 @@ export const api = {
     );
   },
 
-  async acceptInvite(token: string, data: { name?: string }) {
-    return remoteOrLocal(
-      () => req(`/invites/${token}/accept`, { method: 'POST', body: JSON.stringify(data) }),
-      () => {
-        const inv = store.invites.find((i) => i.token === token);
-        if (inv) {
-          inv.accepted = true;
-          store.members = store.members.map((m) => (m.email === inv.email ? { ...m, status: 'active', name: data.name?.trim() || m.name } : m));
-        }
-        return { ok: true };
-      },
-    );
+  async acceptInvite(token: string, data: { name?: string; password: string }) {
+    return authPost<AuthResult>(`/invites/${token}/accept`, data);
   },
 
   async removeMember(id: string) {
@@ -205,6 +228,13 @@ export const api = {
     return remoteOrLocal(
       () => req(`/members/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
       () => { store.members = store.members.map((m) => (m.id === id ? { ...m, role } : m)); return { ok: true }; },
+    );
+  },
+
+  async setMemberStatus(id: string, status: 'active' | 'invited' | 'pending') {
+    return remoteOrLocal(
+      () => req(`/members/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+      () => { store.members = store.members.map((m) => (m.id === id ? { ...m, status } : m)); return { ok: true }; },
     );
   },
 

@@ -141,21 +141,26 @@ function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => voi
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const tones: Asset['tone'][] = ['a', 'b', 'c', 'd'];
-  const reset = () => setFiles([]);
+  const [busy, setBusy] = useState(false);
+  const reset = () => { setFiles([]); setBusy(false); };
   const pick = (fl: FileList | null) => { if (fl) setFiles((p) => [...p, ...Array.from(fl)]); };
   const remove = (i: number) => setFiles((p) => p.filter((_, x) => x !== i));
   const submit = async () => {
-    if (!files.length) return;
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const dot = f.name.lastIndexOf('.');
-      const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : kindOf(f);
-      await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: kindOf(f), ext, size: fmtBytes(f.size), tone: tones[i % 4], store: STORAGE_SHORT[backend] });
-    }
-    qc.invalidateQueries({ queryKey: ['assets'] });
-    toast(`已上传 ${files.length} 个素材 · ${STORAGE_LABEL[backend]}`, 'gallery');
-    reset();
-    onClose();
+    if (!files.length || busy) return;
+    setBusy(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const dot = f.name.lastIndexOf('.');
+        const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : kindOf(f);
+        const up = await api.uploadFile(f); // → R2, public https url
+        await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: kindOf(f), ext, size: fmtBytes(f.size), tone: tones[i % 4], store: STORAGE_SHORT[backend], url: up.url });
+      }
+      qc.invalidateQueries({ queryKey: ['assets'] });
+      toast(`已上传 ${files.length} 个素材 · ${STORAGE_LABEL[backend]}`, 'gallery');
+      reset();
+      onClose();
+    } catch (e) { toast('上传失败：' + (e instanceof Error ? e.message : e), 'warn'); setBusy(false); }
   };
   return (
     <Modal open={open} onClose={onClose}>
@@ -192,7 +197,7 @@ function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => voi
         </div>
         <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
           <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-          <button className="btn btn-pri grow" disabled={!files.length} onClick={submit}><Icon name="import" size={15} />上传 {files.length || ''} 个素材</button>
+          <button className="btn btn-pri grow" disabled={!files.length || busy} onClick={submit}><Icon name={busy ? 'refresh' : 'import'} size={15} className={busy ? 'spin' : ''} />{busy ? '上传中…' : `上传 ${files.length || ''} 个素材`}</button>
         </div>
       </div>
     </Modal>
@@ -233,7 +238,7 @@ export function Assets() {
                 {a.kind === 'audio' && <div className="center" style={{ position: 'absolute', inset: 0 }}><Icon name="mic" size={24} className="faint" /></div>}
                 <div style={{ position: 'absolute', top: 6, right: 6 }}>
                   <Menu align="end" trigger={<button className="icon-btn" style={{ width: 24, height: 24, background: 'rgba(0,0,0,.4)' }}><Icon name="more" size={14} /></button>}
-                    items={[{ icon: 'download', label: '下载' }, { icon: 'copy', label: '复制链接' }, { sep: true }, { icon: 'trash', label: '删除素材', danger: true, onClick: () => del(a.id, a.name) }]} />
+                    items={[{ icon: 'download', label: '下载', onClick: () => a.url && window.open(a.url, '_blank') }, { icon: 'copy', label: '复制链接', onClick: () => { if (a.url) { void navigator.clipboard.writeText(a.url); toast('链接已复制', 'copy'); } } }, { sep: true }, { icon: 'trash', label: '删除素材', danger: true, onClick: () => del(a.id, a.name) }]} />
                 </div>
               </div>
               <div className="row" style={{ padding: '8px 10px', justifyContent: 'space-between', fontSize: 11.5 }}>
@@ -445,11 +450,17 @@ export function Members() {
     qc.invalidateQueries({ queryKey: ['members'] });
     toast('已移出成员 · ' + m.name, 'trash');
   };
+  const approve = async (m: Member) => {
+    await api.setMemberStatus(m.id, 'active');
+    qc.invalidateQueries({ queryKey: ['members'] });
+    toast(`已授权「${m.name}」加入`, 'shield');
+  };
+  const pendingCount = members.filter((m) => m.status === 'pending').length;
 
   return (
     <Screen crumb={<Crumb parts={[{ label: '成员与权限' }]} />}>
       <div className="page">
-        <div className="page-head"><div className="grow"><div className="page-title">成员与权限</div><div className="page-sub">工作空间级角色 + 项目级覆盖 · 后端强制鉴权 RBAC · 共 {members.length} 名成员</div></div>
+        <div className="page-head"><div className="grow"><div className="page-title">成员与权限</div><div className="page-sub">工作空间级角色 + 项目级覆盖 · 后端强制鉴权 RBAC · 共 {members.length} 名成员{pendingCount > 0 ? ` · ${pendingCount} 个待授权` : ''}</div></div>
           <div className="seg">{[['members', '成员'], ['roles', '角色权限']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</div>
           <button className="btn btn-pri" onClick={() => setShowInvite(true)}><Icon name="mail" size={15} />邀请成员</button></div>
         {tab === 'members' ? (
@@ -464,14 +475,18 @@ export function Members() {
                   <td><Menu align="start" trigger={<button className="tag" style={{ height: 26, cursor: m.role === 'owner' ? 'default' : 'pointer' }} disabled={m.role === 'owner'}>{ROLE_LABEL[m.role]}{m.role !== 'owner' && <Icon name="chevDown" size={12} />}</button>}
                     items={ROLE_OPTS.filter((r) => r !== 'owner').map((r) => ({ icon: r === m.role ? 'check' : 'shield', label: ROLE_LABEL[r], onClick: () => setRole(m, r) }))} /></td>
                   <td>{overrides > 0 ? <button className="tag" style={{ height: 22, cursor: 'pointer', color: 'var(--accent-text)' }} onClick={() => setOverrideMember(m)}>{overrides} 个项目</button> : <span className="faint" style={{ fontSize: 12 }}>—</span>}</td>
-                  <td>{m.status === 'invited' ? <span className="pill" style={{ color: 'var(--st-queued)', background: 'var(--st-running-bg)' }}><Icon name="mail" size={11} />待接受</span> : m.online ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><span className="dot" />在线</span> : <span className="faint" style={{ fontSize: 12 }}>离线</span>}</td>
-                  <td><Menu align="end" trigger={<button className="icon-btn"><Icon name="more" size={16} /></button>}
-                    items={[
-                      { icon: 'shield', label: '项目级角色覆盖', onClick: () => setOverrideMember(m) },
-                      { icon: 'history', label: '操作记录' },
-                      { sep: true },
-                      { icon: 'trash', label: m.role === 'owner' ? '不可移出拥有者' : '移出空间', danger: true, onClick: () => remove(m) },
-                    ]} /></td>
+                  <td>{m.status === 'pending' ? <span className="pill" style={{ color: 'var(--st-running)', background: 'var(--st-running-bg)' }}><Icon name="warn" size={11} />待授权</span> : m.status === 'invited' ? <span className="pill" style={{ color: 'var(--st-queued)', background: 'var(--st-running-bg)' }}><Icon name="mail" size={11} />待接受</span> : m.online ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><span className="dot" />在线</span> : <span className="faint" style={{ fontSize: 12 }}>离线</span>}</td>
+                  <td><div className="row gap6" style={{ justifyContent: 'flex-end' }}>
+                    {m.status === 'pending' && <button className="btn btn-pri btn-sm" onClick={() => approve(m)}><Icon name="check" size={13} />授权</button>}
+                    <Menu align="end" trigger={<button className="icon-btn"><Icon name="more" size={16} /></button>}
+                      items={[
+                        m.status === 'pending' ? { icon: 'check', label: '授权加入', onClick: () => approve(m) } : null,
+                        { icon: 'shield', label: '项目级角色覆盖', onClick: () => setOverrideMember(m) },
+                        { icon: 'history', label: '操作记录' },
+                        { sep: true },
+                        { icon: 'trash', label: m.role === 'owner' ? '不可移出拥有者' : '移出空间', danger: true, onClick: () => remove(m) },
+                      ]} />
+                  </div></td>
                 </tr>
               ); })}</tbody>
             </table>

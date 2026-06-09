@@ -6,6 +6,10 @@ import * as mock from '../../src/lib/mock';
 
 export const TEAM_ID = 't_qm';
 
+async function insertEach<T>(rows: T[], insert: (row: T, index: number) => Promise<unknown>) {
+  for (let index = 0; index < rows.length; index++) await insert(rows[index], index);
+}
+
 export async function seed(db: DrizzleD1Database<typeof S>) {
   const now = new Date().toISOString();
 
@@ -16,24 +20,26 @@ export async function seed(db: DrizzleD1Database<typeof S>) {
 
   await db.insert(S.teams).values({ id: TEAM_ID, name: mock.team.name, slug: mock.team.slug, plan: mock.team.plan, createdAt: now });
 
-  await db.insert(S.users).values(mock.members.map((m) => ({ id: m.id, email: m.email, name: m.name, role: m.role, title: m.title, createdAt: now })));
-  await db.insert(S.memberships).values(mock.members.map((m) => ({ id: `mem_${m.id}`, teamId: TEAM_ID, userId: m.id, role: m.role })));
+  await insertEach(mock.members, (m) => db.insert(S.users).values({ id: m.id, email: m.email, name: m.name, role: m.role, title: m.title, createdAt: now }));
+  await insertEach(mock.members, (m) => db.insert(S.memberships).values({ id: `mem_${m.id}`, teamId: TEAM_ID, userId: m.id, role: m.role }));
 
   await db.insert(S.creditWallets).values({ teamId: TEAM_ID, balance: mock.wallet.balance, monthSpent: mock.wallet.monthSpent, monthBudget: mock.wallet.monthBudget });
 
-  await db.insert(S.projects).values(mock.projects.map((p) => ({ id: p.id, teamId: TEAM_ID, name: p.name, tone: p.tone, style: p.style, ratio: p.ratio, res: p.res, episodes: p.episodes, status: p.status, synopsis: p.synopsis, members: p.members, updated: p.updated })));
+  await insertEach(mock.projects, (p) => db.insert(S.projects).values({ id: p.id, teamId: TEAM_ID, name: p.name, tone: p.tone, style: p.style, ratio: p.ratio, res: p.res, episodes: p.episodes, status: p.status, synopsis: p.synopsis, members: p.members, updated: p.updated }));
 
-  await db.insert(S.episodes).values(mock.episodes.map((e) => ({ id: e.id, teamId: TEAM_ID, project: e.project, index: e.index, title: e.title, status: e.status, shots: e.shots, done: e.done, updated: e.updated, assignee: e.assignee })));
+  await insertEach(mock.episodes, (e) => db.insert(S.episodes).values({ id: e.id, teamId: TEAM_ID, project: e.project, index: e.index, title: e.title, status: e.status, shots: e.shots, done: e.done, updated: e.updated, assignee: e.assignee }));
 
-  await db.insert(S.characters).values(mock.characters.map((c) => ({ id: c.id, teamId: TEAM_ID, project: c.project, name: c.name, tone: c.tone, voice: c.voice, tag: c.tag, refs: c.refs, asset: c.asset, desc: c.desc })));
+  await insertEach(mock.characters, (c) => db.insert(S.characters).values({ id: c.id, teamId: TEAM_ID, project: c.project, name: c.name, tone: c.tone, voice: c.voice, tag: c.tag, refs: c.refs, asset: c.asset, desc: c.desc }));
 
-  await db.insert(S.scenes).values(mock.scenes.map((sc, i) => ({ id: sc.id, teamId: TEAM_ID, episode: 'e3', index: i + 1, title: sc.title, loc: sc.loc, mood: sc.mood, time: sc.time, chars: sc.chars })));
+  await insertEach(mock.scenes, (sc, i) => db.insert(S.scenes).values({ id: sc.id, teamId: TEAM_ID, episode: 'e3', index: i + 1, title: sc.title, loc: sc.loc, mood: sc.mood, time: sc.time, chars: sc.chars }));
 
-  await db.insert(S.shots).values(mock.shots.map((s) => ({ id: s.id, teamId: TEAM_ID, scene: s.scene, index: s.index, status: s.status, model: s.model, chars: s.chars, keyframe: s.keyframe, assignee: s.assignee, tone: s.tone, progress: s.progress ?? 0, error: s.error ?? null, prompt: s.prompt, params: s.params, enhance: s.enhance ?? null, updated: now })));
+  await insertEach(mock.shots, (s) => db.insert(S.shots).values({ id: s.id, teamId: TEAM_ID, scene: s.scene, index: s.index, status: s.status, model: s.model, chars: s.chars, keyframe: s.keyframe, assignee: s.assignee, tone: s.tone, progress: s.progress ?? 0, error: s.error ?? null, prompt: s.prompt, params: s.params, beats: s.beats ?? null, enhance: s.enhance ?? null, updated: now }));
 
-  await db.insert(S.generationTasks).values(mock.tasks.map((t) => ({ id: t.id, teamId: TEAM_ID, shot: t.shot, shotIdx: t.shotIdx, ep: t.ep, cap: t.cap, model: t.model, provider: 'volcengine', ptid: t.ptid, state: t.state, progress: t.progress, cost: t.cost, by: t.by, error: t.error ?? null, created: t.created, updated: now })));
+  await insertEach(mock.assets, (a) => db.insert(S.assets).values({ id: a.id, teamId: TEAM_ID, project: 'p_qm', type: a.kind, storage: 'r2', size: 0, name: a.name, kind: a.kind, ext: a.ext, tone: a.tone, storeLabel: a.store, sizeLabel: a.size, created: a.created }));
 
-  await db.insert(S.auditLogs).values(mock.audit.map((a) => ({ id: a.id, teamId: TEAM_ID, actor: a.actor, action: a.action, target: a.target, diff: a.diff, src: a.src, time: a.time })));
+  await insertEach(mock.tasks, (t) => db.insert(S.generationTasks).values({ id: t.id, teamId: TEAM_ID, shot: t.shot, shotIdx: t.shotIdx, ep: t.ep, cap: t.cap, model: t.model, provider: 'volcengine', ptid: t.ptid, state: t.state, progress: t.progress, cost: t.cost, by: t.by, error: t.error ?? null, created: t.created, updated: now }));
+
+  await insertEach(mock.audit, (a) => db.insert(S.auditLogs).values({ id: a.id, teamId: TEAM_ID, actor: a.actor, action: a.action, target: a.target, diff: a.diff, src: a.src, time: a.time }));
 
   await db.insert(S.providerCredentials).values([
     { id: 'pc_volc', teamId: TEAM_ID, provider: 'volcengine', family: 'video', label: '火山方舟 Volcengine', isDefault: true, created: now },

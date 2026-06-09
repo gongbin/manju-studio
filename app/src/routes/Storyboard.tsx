@@ -171,7 +171,19 @@ function SceneRows({ sc, shots, sel, toggle, update, openGenerate, setEnhShot }:
                 : <div className="thumb center" style={{ width: 76, height: 44, ['--tc' as string]: 'var(--surface-4)' }}><Icon name="image" size={16} className="faint" /></div>}
               {live && <div style={{ marginTop: 3 }}><Progress value={s.progress || 0} amber /></div>}
             </td>
-            <td><EditCell value={s.prompt.visual} placeholder="描述画面…" multiline onCommit={(v) => update(s.id, { prompt: { ...s.prompt, visual: v } })} /></td>
+            <td>
+              <EditCell value={s.prompt.visual} placeholder="描述画面…" multiline onCommit={(v) => update(s.id, { prompt: { ...s.prompt, visual: v } })} />
+              {s.beats && s.beats.length > 0 && (
+                <div className="col gap2" style={{ marginTop: 4 }}>
+                  {s.beats.map((b, i) => (
+                    <div key={i} className="row gap4" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                      <span className="mono" style={{ color: 'var(--accent-text)', flex: '0 0 auto' }}>{b.from}s-{b.to}s</span>
+                      <span className="ellipsis">{b.action}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </td>
             <td>
               {s.prompt.dialogue && <div><span className="acc" style={{ fontSize: 10, fontWeight: 700 }}>白</span> <span>{s.prompt.dialogue}</span></div>}
               {s.prompt.voiceover && <div className="muted" style={{ marginTop: 2 }}><span style={{ fontSize: 10, fontWeight: 700, color: 'var(--st-dubbed)' }}>旁</span> {s.prompt.voiceover}</div>}

@@ -1,7 +1,7 @@
 // Drizzle schema for Cloudflare D1 (SQLite). Mirrors docs/TECH_DESIGN.md §5.
 // JSON-shaped columns use { mode: 'json' } so the ORM (de)serializes them.
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import type { PromptFields, ShotParams, EnhanceState } from '../../src/lib/types';
+import type { PromptFields, ShotParams, EnhanceState, TimeBeat } from '../../src/lib/types';
 
 export const teams = sqliteTable('teams', {
   id: text('id').primaryKey(),
@@ -96,6 +96,7 @@ export const shots = sqliteTable('shots', {
   error: text('error'),
   prompt: text('prompt', { mode: 'json' }).$type<PromptFields>().notNull(),
   params: text('params', { mode: 'json' }).$type<ShotParams>().notNull(),
+  beats: text('beats', { mode: 'json' }).$type<TimeBeat[] | null>(),
   enhance: text('enhance', { mode: 'json' }).$type<EnhanceState | null>(),
   updated: text('updated').notNull(),
 });
@@ -129,6 +130,13 @@ export const assets = sqliteTable('assets', {
   key: text('key'),
   url: text('url'),
   size: integer('size').notNull().default(0),
+  // display fields surfaced to the素材库 UI (frontend Asset shape)
+  name: text('name'),
+  kind: text('kind'),
+  ext: text('ext'),
+  tone: text('tone'),
+  storeLabel: text('store_label'),
+  sizeLabel: text('size_label'),
   created: text('created').notNull(),
 });
 

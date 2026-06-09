@@ -53,6 +53,10 @@ api.get('/api/episodes', async (c) => c.json(await getDb(c.env).select().from(S.
 api.get('/api/shots', async (c) => c.json(await getDb(c.env).select().from(S.shots).where(eq(S.shots.teamId, TEAM_ID)).all()));
 api.get('/api/scenes', async (c) => c.json(await getDb(c.env).select().from(S.scenes).where(eq(S.scenes.teamId, TEAM_ID)).all()));
 api.get('/api/characters', async (c) => c.json(await getDb(c.env).select().from(S.characters).where(eq(S.characters.teamId, TEAM_ID)).all()));
+api.get('/api/assets', async (c) => {
+  const rows = await getDb(c.env).select().from(S.assets).where(eq(S.assets.teamId, TEAM_ID)).orderBy(desc(S.assets.created)).all();
+  return c.json(rows.map((a) => ({ id: a.id, name: a.name ?? a.id, kind: a.kind ?? a.type, ext: a.ext ?? '', tone: a.tone ?? 'a', store: a.storeLabel ?? 'R2', size: a.sizeLabel ?? '', created: a.created })));
+});
 api.get('/api/tasks', async (c) => c.json(await getDb(c.env).select().from(S.generationTasks).where(eq(S.generationTasks.teamId, TEAM_ID)).orderBy(desc(S.generationTasks.created)).all()));
 api.get('/api/audit', async (c) => c.json(await getDb(c.env).select().from(S.auditLogs).where(eq(S.auditLogs.teamId, TEAM_ID)).orderBy(desc(S.auditLogs.time)).all()));
 api.get('/api/models', (c) => c.json(MODELS));
@@ -83,11 +87,29 @@ api.post('/api/episodes', async (c) => {
   return c.json({ id });
 });
 
+api.post('/api/characters', async (c) => {
+  const d = await c.req.json<{ name: string; tag?: string; tone?: string; voice?: string; desc?: string; asset?: boolean; project?: string }>();
+  const db = getDb(c.env);
+  const id = 'c_' + Math.random().toString(36).slice(2, 7);
+  await db.insert(S.characters).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', name: d.name, tone: d.tone ?? 'a', voice: d.voice ?? '', tag: d.tag ?? '配角', refs: 0, asset: d.asset ? `asset://qm/${id}` : '', desc: d.desc ?? '' });
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'character.create', target: d.name, diff: '新建角色' });
+  return c.json({ id });
+});
+
+api.post('/api/assets', async (c) => {
+  const d = await c.req.json<{ name: string; kind: string; ext?: string; size?: string; tone?: string; project?: string }>();
+  const db = getDb(c.env);
+  const id = 'as_' + Math.random().toString(36).slice(2, 7);
+  await db.insert(S.assets).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', type: d.kind, storage: 'r2', size: 0, name: d.name, kind: d.kind, ext: d.ext ?? '', tone: d.tone ?? 'a', storeLabel: 'R2', sizeLabel: d.size ?? '', created: ids.now() });
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'asset.upload', target: d.name, diff: `上传素材 · ${d.kind}` });
+  return c.json({ id });
+});
+
 api.patch('/api/shots/:id', async (c) => {
   const id = c.req.param('id');
   const patch = await c.req.json<Record<string, unknown>>();
   const allowed: Record<string, unknown> = {};
-  for (const k of ['status', 'model', 'prompt', 'params', 'chars', 'keyframe', 'assignee', 'progress', 'error', 'enhance'] as const) {
+  for (const k of ['status', 'model', 'prompt', 'params', 'beats', 'chars', 'keyframe', 'assignee', 'progress', 'error', 'enhance'] as const) {
     if (k in patch) allowed[k] = patch[k];
   }
   allowed.updated = ids.now();

@@ -15,6 +15,7 @@
 | Root directory（根目录） | `app` |
 | Build command（构建命令） | `npm run build` |
 | Deploy command（部署命令） | `npx wrangler deploy` |
+| Static assets / Output directory（静态资源目录） | `dist` |
 
 部署完成后，首次访问需灌入演示数据：`POST /api/_seed`，请求头 `x-seed-key: dev`（生产请改 `SEED_KEY`）。
 更完整的部署/对接真实火山生成说明见 [`app/DEPLOY.md`](./app/DEPLOY.md)（含命令行一键脚本 `npm run cf:provision`）。

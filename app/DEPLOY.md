@@ -6,7 +6,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gongbin/manju-studio)
 
-按钮会 fork 仓库、自动创建并绑定 D1/R2/KV/Queues、构建并部署。引导中若询问构建设置：根目录 `app`、构建命令 `npm run build`、部署命令 `npx wrangler deploy`。部署后调用一次 `POST /api/_seed`（请求头 `x-seed-key: dev`）灌入演示数据。
+按钮会 fork 仓库、自动创建并绑定 D1/R2/KV/Queues、构建并部署。引导中若询问构建设置：根目录 `app`、构建命令 `npm run build`、部署命令 `npx wrangler deploy`、静态资源/输出目录 `dist`。部署后调用一次 `POST /api/_seed`（请求头 `x-seed-key: dev`）灌入演示数据。
 
 > 偏好命令行 / 需要精确控制资源，用下面的脚本或手动步骤。
 
@@ -60,6 +60,27 @@ curl -X POST https://manju-studio.<子域>.workers.dev/api/_seed -H "x-seed-key:
 ```
 
 > 生产请把 `wrangler.toml` 里的 `SEED_KEY` 改成强随机值（或删除 `[vars]` 用机密）。
+
+## 线上访问报 `text/plain` MIME
+
+如果浏览器报 `TypeError: 'text/plain' is not a valid JavaScript MIME type`，通常是 Cloudflare 把源码目录 `app/` 当成静态资源发布了，导致首页仍加载 `/src/main.tsx`。正确部署后，线上首页应该加载 `/assets/*.js`，资源目录来自 `wrangler.toml` 的 `[assets].directory = "./dist"`。
+
+在 Cloudflare Dashboard 的该 Worker 部署设置里确认：
+
+| 项 | 值 |
+|---|---|
+| Root directory | `app` |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Static assets / Output directory | `dist` |
+
+改完后重新触发一次生产部署，或在已登录 Wrangler 的本机执行：
+
+```bash
+cd app
+npm run build
+npx wrangler deploy
+```
 
 ## 本地开发
 

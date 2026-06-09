@@ -2,7 +2,7 @@
 // reachable (e.g. plain `vite dev` with no worker) it transparently falls back
 // to an in-memory store + polling simulation so the UI still works.
 import * as mock from './mock';
-import type { Episode, GenerationTask, Project, Shot, Wallet, Capability } from './types';
+import type { Asset, Character, Episode, GenerationTask, Project, Shot, Wallet, Capability } from './types';
 
 const API = '/api';
 let useMock: boolean | null = null;
@@ -25,6 +25,8 @@ const store = {
   wallet: { ...mock.wallet } as Wallet,
   projects: mock.projects.map((p) => ({ ...p })),
   episodes: mock.episodes.map((e) => ({ ...e })),
+  characters: mock.characters.map((c) => ({ ...c })) as Character[],
+  assets: mock.assets.map((a) => ({ ...a })) as Asset[],
 };
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -34,6 +36,8 @@ export const api = {
   async listProjects() { return remoteOrLocal(() => req<Project[]>('/projects'), () => clone(store.projects)); },
   async listEpisodes() { return remoteOrLocal(() => req<Episode[]>('/episodes'), () => clone(store.episodes)); },
   async listShots() { return remoteOrLocal(() => req<Shot[]>('/shots'), () => clone(store.shots)); },
+  async listCharacters() { return remoteOrLocal(() => req<Character[]>('/characters'), () => clone(store.characters)); },
+  async listAssets() { return remoteOrLocal(() => req<Asset[]>('/assets'), () => clone(store.assets)); },
   async listTasks() { return remoteOrLocal(() => req<GenerationTask[]>('/tasks'), () => clone(store.tasks)); },
   async getWallet() { return remoteOrLocal(() => req<Wallet>('/wallet'), () => clone(store.wallet)); },
 
@@ -63,6 +67,28 @@ export const api = {
         const id = 'e_' + Math.random().toString(36).slice(2, 7);
         store.episodes = [...store.episodes, { id, project: projectId, index: idx, title: data.title, status: 'draft', shots: 0, done: 0, updated: new Date().toISOString(), assignee: data.assignee }];
         store.projects = store.projects.map((p) => (p.id === projectId ? { ...p, episodes: p.episodes + 1 } : p));
+        return id;
+      },
+    );
+  },
+
+  async addCharacter(data: { name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean; project?: string }): Promise<string> {
+    return remoteOrLocal(
+      async () => (await req<{ id: string }>('/characters', { method: 'POST', body: JSON.stringify(data) })).id,
+      () => {
+        const id = 'c_' + Math.random().toString(36).slice(2, 7);
+        store.characters = [{ id, name: data.name, project: data.project || 'p_qm', tone: data.tone as never, voice: data.voice, tag: data.tag, refs: 0, asset: data.asset ? `asset://qm/${id}` : '', desc: data.desc }, ...store.characters];
+        return id;
+      },
+    );
+  },
+
+  async addAsset(data: { name: string; kind: Asset['kind']; ext: string; size: string; tone: string }): Promise<string> {
+    return remoteOrLocal(
+      async () => (await req<{ id: string }>('/assets', { method: 'POST', body: JSON.stringify(data) })).id,
+      () => {
+        const id = 'as_' + Math.random().toString(36).slice(2, 7);
+        store.assets = [{ id, name: data.name, kind: data.kind, ext: data.ext, tone: data.tone as never, store: 'R2', size: data.size, created: new Date().toISOString() }, ...store.assets];
         return id;
       },
     );

@@ -89,6 +89,13 @@ export interface ShotParams {
   watermark: boolean;
 }
 
+/** Time-anchored beat inside a shot — lets the author精准控制长度结构，如 5s-9s。 */
+export interface TimeBeat {
+  from: number;
+  to: number;
+  action: string;
+}
+
 export interface EnhanceState {
   status: 'idle' | 'queued' | 'processing' | 'succeeded' | 'failed';
   type?: string;
@@ -110,6 +117,7 @@ export interface Shot {
   error?: string | null;
   prompt: PromptFields;
   params: ShotParams;
+  beats?: TimeBeat[];
   enhance?: EnhanceState;
 }
 
@@ -144,6 +152,17 @@ export interface VideoModel {
   audio: boolean;
   charAsset: boolean;
   base: number;
+}
+
+export interface Asset {
+  id: string;
+  name: string;
+  kind: 'image' | 'video' | 'audio';
+  ext: string;
+  tone: Tone;
+  store: string;
+  size: string;
+  created: string;
 }
 
 export interface AuditEntry {

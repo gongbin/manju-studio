@@ -1,21 +1,80 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
+import { Modal } from '@/ui/dialog';
+import { Switch } from '@/ui/controls';
 import { Thumb, Avatar } from '@/ui/primitives';
 import { Progress } from '@/ui/controls';
+import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
-import { characters, members, audit, ROLE_LABEL, nameOf, wallet as walletSeed } from '@/lib/mock';
-import type { Role } from '@/lib/types';
+import { characters as charSeed, assets as assetSeed, members, audit, ROLE_LABEL, nameOf, wallet as walletSeed } from '@/lib/mock';
+import type { Asset, Role } from '@/lib/types';
+
+const TONES: [string, string][] = [['b', '青紫'], ['a', '暗棕'], ['c', '暖褐'], ['d', '青绿']];
+const TAGS = ['男主', '女主', '配角', '反派', '群演'];
+function chipStyle(on: boolean) {
+  return { height: 28, cursor: 'pointer', background: on ? 'var(--accent-soft)' : undefined, borderColor: on ? 'var(--accent-line)' : undefined, color: on ? 'var(--accent-text)' : undefined } as const;
+}
 
 /* ---------------- Characters ---------------- */
+function NewCharacterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [tag, setTag] = useState('配角');
+  const [tone, setTone] = useState('b');
+  const [voice, setVoice] = useState('');
+  const [desc, setDesc] = useState('');
+  const [asset, setAsset] = useState(true);
+  const reset = () => { setName(''); setTag('配角'); setTone('b'); setVoice(''); setDesc(''); setAsset(true); };
+  const submit = async () => {
+    if (!name.trim()) return;
+    await api.addCharacter({ name: name.trim(), tag, tone, voice: voice.trim() || '未设定', desc: desc.trim(), asset });
+    qc.invalidateQueries({ queryKey: ['characters'] });
+    toast('已新建角色 · ' + name.trim(), 'users');
+    reset();
+    onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose}>
+      <div style={{ width: 'min(520px, 94vw)' }}>
+        <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
+          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="users" size={17} /></span>
+          <div className="grow"><b style={{ fontSize: 15 }}>新建角色</b><div className="faint" style={{ fontSize: 12 }}>角色卡 + 一致性资产，跨集跨镜头复用</div></div>
+          <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+        </div>
+        <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap16">
+          <label><span className="lbl">角色名称 <span style={{ color: 'var(--st-failed)' }}>*</span></span>
+            <input className="field" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="如：沈砚" onKeyDown={(e) => e.key === 'Enter' && submit()} /></label>
+          <div><div className="lbl">角色定位</div><div className="row gap6 wrap">{TAGS.map((t) => <button key={t} onClick={() => setTag(t)} className="tag" style={chipStyle(tag === t)}>{t}</button>)}</div></div>
+          <label><span className="lbl">配音音色</span>
+            <input className="field" value={voice} onChange={(e) => setVoice(e.target.value)} placeholder="如：青年·清冷男声" /></label>
+          <label><span className="lbl">角色设定 / 外观</span>
+            <textarea className="field" rows={3} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="服饰、神态、关键特征…用于参考图与一致性提示" /></label>
+          <div><div className="lbl">封面调性</div><div className="row gap8">{TONES.map(([tk, tl]) => <button key={tk} onClick={() => setTone(tk)} style={{ flex: 1, cursor: 'pointer', borderRadius: 9, overflow: 'hidden', border: '2px solid ' + (tone === tk ? 'var(--accent)' : 'transparent'), padding: 0 }}><Thumb w="100%" h={42} tone={tk} rounded={0} label={tl} /></button>)}</div></div>
+          <div className="row gap10" style={{ alignItems: 'center', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}>
+            <div className="grow"><div style={{ fontSize: 13, fontWeight: 600 }}>建立一致性资产</div><div className="faint" style={{ fontSize: 11.5 }}>生成 asset:// 资产，生成镜头时自动注入为 reference_image</div></div>
+            <Switch checked={asset} onChange={setAsset} />
+          </div>
+        </div>
+        <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
+          <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
+          <button className="btn btn-pri grow" disabled={!name.trim()} onClick={submit}><Icon name="plus" size={15} />新建角色</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Characters() {
+  const [showNew, setShowNew] = useState(false);
+  const { data: characters = [] } = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters, initialData: charSeed });
   return (
     <Screen crumb={<Crumb parts={[{ label: '角色库' }]} />}>
       <div className="page">
-        <div className="page-head"><div className="grow"><div className="page-title">角色库</div><div className="page-sub">角色卡 · 参考图集 · 一致性资产，跨集跨镜头复用</div></div><button className="btn btn-pri"><Icon name="plus" size={16} />新建角色</button></div>
+        <div className="page-head"><div className="grow"><div className="page-title">角色库</div><div className="page-sub">角色卡 · 参考图集 · 一致性资产，跨集跨镜头复用</div></div><button className="btn btn-pri" onClick={() => setShowNew(true)}><Icon name="plus" size={16} />新建角色</button></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(250px,1fr))', gap: 16 }}>
           {characters.map((c) => (
             <div key={c.id} className="card" style={{ overflow: 'hidden' }}>
@@ -36,41 +95,112 @@ export function Characters() {
           ))}
         </div>
       </div>
+      <NewCharacterModal open={showNew} onClose={() => setShowNew(false)} />
     </Screen>
   );
 }
 
 /* ---------------- Assets ---------------- */
+const KIND_LABEL: Record<Asset['kind'], string> = { image: 'IMG', video: 'VIDEO', audio: 'AUDIO' };
+function fmtBytes(n: number) {
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB';
+  if (n >= 1 << 10) return Math.round(n / (1 << 10)) + ' KB';
+  return n + ' B';
+}
+function kindOf(file: File): Asset['kind'] {
+  if (file.type.startsWith('video')) return 'video';
+  if (file.type.startsWith('audio')) return 'audio';
+  return 'image';
+}
+
+function UploadAssetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const tones: Asset['tone'][] = ['a', 'b', 'c', 'd'];
+  const reset = () => setFiles([]);
+  const pick = (fl: FileList | null) => { if (fl) setFiles((p) => [...p, ...Array.from(fl)]); };
+  const remove = (i: number) => setFiles((p) => p.filter((_, x) => x !== i));
+  const submit = async () => {
+    if (!files.length) return;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const dot = f.name.lastIndexOf('.');
+      const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : kindOf(f);
+      await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: kindOf(f), ext, size: fmtBytes(f.size), tone: tones[i % 4] });
+    }
+    qc.invalidateQueries({ queryKey: ['assets'] });
+    toast(`已上传 ${files.length} 个素材 · Cloudflare R2`, 'gallery');
+    reset();
+    onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose}>
+      <div style={{ width: 'min(520px, 94vw)' }}>
+        <div className="row gap10" style={{ padding: '15px 18px', borderBottom: '1px solid var(--line)' }}>
+          <span className="center" style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><Icon name="gallery" size={17} /></span>
+          <div className="grow"><b style={{ fontSize: 15 }}>上传素材</b><div className="faint" style={{ fontSize: 12 }}>图 / 视频 / 音频 · 默认上传至 Cloudflare R2</div></div>
+          <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
+        </div>
+        <div style={{ padding: 18, maxHeight: '64vh', overflow: 'auto' }} className="col gap14">
+          <input ref={inputRef} type="file" multiple accept="image/*,video/*,audio/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = ''; }} />
+          <div onClick={() => inputRef.current?.click()} className="center col gap8" style={{ cursor: 'pointer', border: '1.5px dashed var(--line-2)', borderRadius: 12, padding: '28px 16px', color: 'var(--text-3)' }}>
+            <Icon name="import" size={28} className="acc" />
+            <div style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 600 }}>点击选择文件，或拖入此处</div>
+            <div className="faint" style={{ fontSize: 11.5 }}>支持 png / jpg / mp4 / mov / mp3 / wav，可多选</div>
+          </div>
+          {files.length > 0 && (
+            <div className="col gap6">
+              <div className="lbl">待上传 · {files.length}</div>
+              {files.map((f, i) => (
+                <div key={i} className="row gap10" style={{ padding: '7px 10px', background: 'var(--surface-2)', borderRadius: 8, fontSize: 12 }}>
+                  <Icon name={kindOf(f) === 'video' ? 'film' : kindOf(f) === 'audio' ? 'mic' : 'image'} size={15} className="acc" />
+                  <span className="grow ellipsis">{f.name}</span>
+                  <span className="mono faint" style={{ fontSize: 11 }}>{fmtBytes(f.size)}</span>
+                  <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => remove(i)}><Icon name="x" size={13} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
+          <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
+          <button className="btn btn-pri grow" disabled={!files.length} onClick={submit}><Icon name="import" size={15} />上传 {files.length || ''} 个素材</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Assets() {
   const [type, setType] = useState('all');
-  const kinds: [string, string, string][] = [
-    ['IMG', 'a', 'image'], ['VIDEO', 'b', 'video'], ['AUDIO', 'c', 'audio'], ['VIDEO', 'd', 'video'],
-    ['IMG', 'b', 'image'], ['VIDEO', 'a', 'video'], ['IMG', 'c', 'image'], ['VIDEO', 'd', 'video'],
-    ['AUDIO', 'a', 'audio'], ['VIDEO', 'b', 'video'], ['IMG', 'd', 'image'], ['VIDEO', 'c', 'video'],
-  ];
-  const list = kinds.filter((k) => type === 'all' || k[2] === type);
+  const [showUpload, setShowUpload] = useState(false);
+  const { data: assets = [] } = useQuery({ queryKey: ['assets'], queryFn: api.listAssets, initialData: assetSeed });
+  const list = assets.filter((a) => type === 'all' || a.kind === type);
   return (
     <Screen crumb={<Crumb parts={[{ label: '素材库' }]} />}>
       <div className="page">
         <div className="page-head">
           <div className="grow"><div className="page-title">素材库</div><div className="page-sub">图 / 视频 / 音频统一管理 · 默认 Cloudflare R2 · 可选火山 TOS</div></div>
           <div className="seg">{[['all', '全部'], ['image', '图片'], ['video', '视频'], ['audio', '音频']].map(([k, l]) => <button key={k} className={type === k ? 'on' : ''} onClick={() => setType(k)}>{l}</button>)}</div>
-          <button className="btn btn-pri"><Icon name="plus" size={16} />上传</button>
+          <button className="btn btn-pri" onClick={() => setShowUpload(true)}><Icon name="plus" size={16} />上传</button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(170px,1fr))', gap: 12 }}>
-          {list.map((k, i) => (
-            <div key={i} className="card" style={{ overflow: 'hidden' }}>
+          {list.map((a) => (
+            <div key={a.id} className="card" style={{ overflow: 'hidden' }}>
               <div style={{ position: 'relative' }}>
-                <Thumb w="100%" h={108} tone={k[1]} rounded={0} label={k[0] + ' ' + String(i + 1).padStart(3, '0')} playable={k[2] === 'video'} />
-                {k[2] === 'audio' && <div className="center" style={{ position: 'absolute', inset: 0 }}><Icon name="mic" size={24} className="faint" /></div>}
+                <Thumb w="100%" h={108} tone={a.tone} rounded={0} label={KIND_LABEL[a.kind] + ' ' + a.name.replace(/^[A-Z]+_/, '')} playable={a.kind === 'video'} />
+                {a.kind === 'audio' && <div className="center" style={{ position: 'absolute', inset: 0 }}><Icon name="mic" size={24} className="faint" /></div>}
               </div>
               <div className="row" style={{ padding: '8px 10px', justifyContent: 'space-between', fontSize: 11.5 }}>
-                <span className="mono faint">{k[2] === 'audio' ? '·mp3' : k[2] === 'video' ? '·mp4' : '·png'}</span><span className="faint">R2</span>
+                <span className="mono faint">·{a.ext}</span><span className="faint">{a.size} · {a.store}</span>
               </div>
             </div>
           ))}
+          {list.length === 0 && <div className="faint" style={{ fontSize: 13, padding: 20 }}>暂无{type === 'all' ? '' : { image: '图片', video: '视频', audio: '音频' }[type]}素材</div>}
         </div>
       </div>
+      <UploadAssetModal open={showUpload} onClose={() => setShowUpload(false)} />
     </Screen>
   );
 }

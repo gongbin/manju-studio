@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Drawer } from '@/ui/dialog';
 import { Icon } from '@/ui/icon';
@@ -9,7 +9,7 @@ import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
 import { models, characters, charOf, wallet as walletSeed } from '@/lib/mock';
-import type { Shot } from '@/lib/types';
+import type { Shot, TimeBeat } from '@/lib/types';
 
 const RES_MULT: Record<string, number> = { '480p': 1, '720p': 1.8, '1080p': 3, '4K': 6 };
 
@@ -25,18 +25,66 @@ function Toggle({ on, set, label }: { on: boolean; set: (v: boolean) => void; la
   );
 }
 
+interface RefItem { name: string; kind: 'file' | 'url' }
+function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
+  icon: string; label: string; max: number; on: boolean; accept: string; multiple: boolean;
+  items: RefItem[]; setItems: (v: RefItem[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const full = items.length >= max;
+  const addFiles = (fl: FileList | null) => {
+    if (!fl) return;
+    const room = max - items.length;
+    setItems([...items, ...Array.from(fl).slice(0, room).map((f) => ({ name: f.name, kind: 'file' as const }))]);
+  };
+  const addUrl = () => {
+    const u = window.prompt(`粘贴 ${label} URL`);
+    if (u && u.trim() && !full) setItems([...items, { name: u.trim(), kind: 'url' as const }]);
+  };
+  return (
+    <div style={{ border: '1px dashed var(--line-2)', borderRadius: 10, padding: 9, opacity: on ? 1 : 0.45 }}>
+      <input ref={inputRef} type="file" accept={accept} multiple={multiple} style={{ display: 'none' }} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+      <div className="center col gap3" style={{ color: 'var(--text-3)', padding: '4px 0 6px' }}>
+        <Icon name={icon} size={20} className={items.length ? 'acc' : ''} />
+        <span style={{ fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600 }}>{label}</span>
+        <span className="faint" style={{ fontSize: 10 }}>{on ? `${items.length}/${max}` : `Max ${max} · 不支持`}</span>
+      </div>
+      {items.length > 0 && (
+        <div className="col gap3" style={{ marginBottom: 6 }}>
+          {items.map((it, i) => (
+            <div key={i} className="row gap4" style={{ fontSize: 10, padding: '2px 5px', background: 'var(--surface-2)', borderRadius: 5 }}>
+              <Icon name={it.kind === 'url' ? 'link' : 'check'} size={10} className="acc" />
+              <span className="grow ellipsis" title={it.name}>{it.name}</span>
+              <button className="icon-btn" style={{ width: 16, height: 16 }} onClick={() => setItems(items.filter((_, x) => x !== i))}><Icon name="x" size={10} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="row gap4">
+        <button className="btn btn-soft" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full} onClick={() => inputRef.current?.click()}>Upload</button>
+        <button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full} onClick={addUrl}>URL</button>
+      </div>
+    </div>
+  );
+}
+
 export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: () => void }) {
   const qc = useQueryClient();
   const { data: wallet = walletSeed } = useQuery({ queryKey: ['wallet'], queryFn: api.getWallet, initialData: walletSeed });
   const [modelId, setModelId] = useState(shots[0]?.model ?? 'seedance-2.0');
   const model = models.find((m) => m.id === modelId) || models[0];
-  const [res, setRes] = useState('1080p');
+  const initModel = models.find((m) => m.id === (shots[0]?.model ?? 'seedance-2.0')) || models[0];
+  const [res, setRes] = useState(initModel.res.includes('480p') ? '480p' : initModel.res[0]);
   const [ratio, setRatio] = useState('adaptive');
   const [dur, setDur] = useState<string | number>('smart');
   const [audio, setAudio] = useState(true);
   const [web, setWeb] = useState(false);
   const [wm, setWm] = useState(true);
   const [prompt, setPrompt] = useState(() => ({ ...shots[0]?.prompt }));
+  const [beats, setBeats] = useState<TimeBeat[]>(() => (shots[0]?.beats ?? []).map((b) => ({ ...b })));
+  const [refImgs, setRefImgs] = useState<RefItem[]>([]);
+  const [refVids, setRefVids] = useState<RefItem[]>([]);
+  const [refAuds, setRefAuds] = useState<RefItem[]>([]);
 
   const durSec = dur === 'smart' ? 5 : Number(dur);
   const perShot = Math.round((model.base * durSec * (RES_MULT[res] || 1) * (audio ? 1.15 : 1)) / 5);
@@ -44,6 +92,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   const durOpts: (string | number)[] = ['smart', ...[3, 4, 5, 6, 8, 10, 12].filter((d) => d >= model.dur[0] && d <= model.dur[1])];
 
   const submit = async () => {
+    if (shots.length === 1) await api.updateShot(shots[0].id, { prompt: { ...prompt } as Shot['prompt'], beats });
     await api.submitGenerate(shots.map((s) => s.id), { model: modelId }, total);
     qc.invalidateQueries({ queryKey: ['shots'] });
     qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -77,6 +126,29 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
                 <div><div className="lbl">音效 SFX</div><input className="field" value={prompt.soundEffects} onChange={(e) => P('soundEffects', e.target.value)} /></div>
                 <div><div className="lbl">机位 Camera</div><input className="field" value={prompt.cameraPosition} onChange={(e) => P('cameraPosition', e.target.value)} /></div>
                 <div><div className="lbl">运镜 Movement</div><input className="field" value={prompt.cameraMovement} onChange={(e) => P('cameraMovement', e.target.value)} /></div>
+              </div>
+
+              <div>
+                <div className="row gap8" style={{ marginBottom: 4 }}>
+                  <Icon name="clock" size={14} className="acc" />
+                  <b style={{ fontSize: 12.5 }}>时长结构 · 镜头节拍 Beats</b>
+                  <span className="grow" />
+                  <span className="faint mono" style={{ fontSize: 10.5 }}>{beats.length ? `共 ${beats.length} 段 · ${beats.reduce((a, b) => Math.max(a, b.to), 0)}s` : '可选'}</span>
+                </div>
+                <div className="faint" style={{ fontSize: 11, marginBottom: 8 }}>按时间切分镜头动作（如 5s–9s …），精准控制镜头内的长度与节奏</div>
+                <div className="col gap6">
+                  {beats.map((b, i) => (
+                    <div key={i} className="row gap6" style={{ alignItems: 'center' }}>
+                      <input type="number" min={0} className="field mono" style={{ width: 52, textAlign: 'center', padding: '6px 4px' }} value={b.from} onChange={(e) => setBeats(beats.map((x, j) => (j === i ? { ...x, from: Number(e.target.value) } : x)))} />
+                      <span className="faint" style={{ fontSize: 11 }}>s –</span>
+                      <input type="number" min={0} className="field mono" style={{ width: 52, textAlign: 'center', padding: '6px 4px' }} value={b.to} onChange={(e) => setBeats(beats.map((x, j) => (j === i ? { ...x, to: Number(e.target.value) } : x)))} />
+                      <span className="faint" style={{ fontSize: 11 }}>s</span>
+                      <input className="field grow" style={{ padding: '6px 8px' }} placeholder="该时间段的画面动作…" value={b.action} onChange={(e) => setBeats(beats.map((x, j) => (j === i ? { ...x, action: e.target.value } : x)))} />
+                      <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => setBeats(beats.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button>
+                    </div>
+                  ))}
+                  <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => { const last = beats[beats.length - 1]; const from = last ? last.to : 0; setBeats([...beats, { from, to: from + 2, action: '' }]); }}><Icon name="plus" size={13} />添加节拍</button>
+                </div>
               </div>
             </div>
           </div>
@@ -121,14 +193,11 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
 
         <div>
           <div className="row gap8" style={{ marginBottom: 3 }}><Icon name="image" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>参考素材 Reference</b></div>
-          <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>注入为 reference_image / video / audio，提升一致性与运镜还原</div>
+          <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>注入为 reference_image / video / audio，提升一致性与运镜还原 · 受模型数量上限约束</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            {[{ icon: 'image', label: 'Images', max: 9, on: model.refImg }, { icon: 'film', label: 'Video', max: 3, on: model.refVid }, { icon: 'mic', label: 'Audio', max: 3, on: model.refAud }].map((z) => (
-              <div key={z.label} style={{ border: '1px dashed var(--line-2)', borderRadius: 10, padding: 9, opacity: z.on ? 1 : 0.45 }}>
-                <div className="center col gap3" style={{ color: 'var(--text-3)', padding: '4px 0 6px' }}><Icon name={z.icon} size={20} /><span style={{ fontSize: 11.5, color: 'var(--text-2)', fontWeight: 600 }}>{z.label}</span><span className="faint" style={{ fontSize: 10 }}>Max {z.max}{z.on ? '' : ' · 不支持'}</span></div>
-                <div className="row gap4"><button className="btn btn-soft" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!z.on}>Upload</button><button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!z.on}>URL</button></div>
-              </div>
-            ))}
+            <RefZone icon="image" label="Images" max={9} on={model.refImg} accept="image/*" multiple items={refImgs} setItems={setRefImgs} />
+            <RefZone icon="film" label="Video" max={3} on={model.refVid} accept="video/*" multiple items={refVids} setItems={setRefVids} />
+            <RefZone icon="mic" label="Audio" max={3} on={model.refAud} accept="audio/*" multiple items={refAuds} setItems={setRefAuds} />
           </div>
         </div>
 

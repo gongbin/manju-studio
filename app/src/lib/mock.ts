@@ -1,8 +1,8 @@
 // Mock domain data — ported from ../../demo-ui/src/data.jsx.
 // In the real app these are served by Cloudflare Workers + D1 (docs §5/§12).
 import type {
-  AuditEntry, Character, Episode, GenerationTask, Member, Project,
-  Role, Scene, Shot, PromptFields, ShotParams, VideoModel, Wallet,
+  Asset, AuditEntry, Character, Episode, GenerationTask, Member, Project,
+  Role, Scene, Shot, PromptFields, ShotParams, Tone, VideoModel, Wallet,
 } from './types';
 
 const now = Date.now();
@@ -82,8 +82,8 @@ const mkPrompt = (o: Partial<PromptFields>): PromptFields => ({ visual: '', dial
 const mkParams = (o: Partial<ShotParams>): ShotParams => ({ resolution: '1080p', ratio: '16:9', duration: 5, generateAudio: false, webSearch: false, watermark: false, ...o });
 
 export const shots: Shot[] = [
-  { id: 'sh1', scene: 's1', index: 1, status: 'generated', model: 'seedance-2.0', chars: ['c_shen', 'c_lao'], keyframe: true, assignee: 'u_qi', tone: 'b', prompt: mkPrompt({ visual: '暴雨夜，青冥城巨大城门在闪电下显出轮廓，仰拍，城楼"青冥"匾额特写后拉', cameraPosition: '大远景·仰拍', cameraMovement: '缓推 + 闪电定格', soundEffects: '暴雨、闷雷、城门吱呀', voiceover: '十年了，他终究还是回来了。' }), params: mkParams({ duration: 6, generateAudio: true }) },
-  { id: 'sh2', scene: 's1', index: 2, status: 'generated', model: 'seedance-2.0', chars: ['c_shen'], keyframe: true, assignee: 'u_qi', tone: 'b', prompt: mkPrompt({ visual: '沈砚立于城门前，玄色长衫被雨浸透，背影，水珠从伞沿滑落', dialogue: '我等的人，在里面。', cameraPosition: '中景·背身', cameraMovement: '固定·浅景深', soundEffects: '雨声、衣料滴水' }), params: mkParams({ duration: 5 }) },
+  { id: 'sh1', scene: 's1', index: 1, status: 'generated', model: 'seedance-2.0', chars: ['c_shen', 'c_lao'], keyframe: true, assignee: 'u_qi', tone: 'b', prompt: mkPrompt({ visual: '暴雨夜，青冥城巨大城门在闪电下显出轮廓，仰拍，城楼"青冥"匾额特写后拉', cameraPosition: '大远景·仰拍', cameraMovement: '缓推 + 闪电定格', soundEffects: '暴雨、闷雷、城门吱呀', voiceover: '十年了，他终究还是回来了。' }), params: mkParams({ duration: 6, generateAudio: true }), beats: [{ from: 0, to: 3, action: '暴雨夜，城门在闪电下显出轮廓，仰拍缓推' }, { from: 3, to: 6, action: '"青冥"匾额特写后拉，雷声渐弱' }] },
+  { id: 'sh2', scene: 's1', index: 2, status: 'generated', model: 'seedance-2.0', chars: ['c_shen'], keyframe: true, assignee: 'u_qi', tone: 'b', prompt: mkPrompt({ visual: '沈砚立于城门前，玄色长衫被雨浸透，背影，水珠从伞沿滑落', dialogue: '我等的人，在里面。', cameraPosition: '中景·背身', cameraMovement: '固定·浅景深', soundEffects: '雨声、衣料滴水' }), params: mkParams({ duration: 5 }), beats: [{ from: 0, to: 2, action: '沈砚立于城门前，背影，玄色长衫被雨浸透' }, { from: 2, to: 5, action: '水珠从伞沿滑落，他低声开口' }] },
   { id: 'sh3', scene: 's1', index: 3, status: 'generated', model: 'seedance-2.0-fast', chars: ['c_lao'], keyframe: true, assignee: 'u_qi', tone: 'c', prompt: mkPrompt({ visual: '陆船夫蓑衣斗笠，畏缩着抬头，雨水顺斗笠流下，左眼疤痕在闪电中清晰', dialogue: '客官，这城夜里不太平……', cameraPosition: '近景·侧脸', cameraMovement: '轻微手持晃动', soundEffects: '雨打斗笠' }), params: mkParams({ duration: 4 }) },
   { id: 'sh4', scene: 's1', index: 4, status: 'generated', model: 'seedance-2.0', chars: ['c_shen'], keyframe: true, assignee: 'u_qi', tone: 'd', prompt: mkPrompt({ visual: '沈砚抬眸望向城楼，雨幕中目光沉静，眼神特写', cameraPosition: '特写·眼部', cameraMovement: '极缓推近', soundEffects: '雷声渐弱' }), params: mkParams({ duration: 4 }) },
   { id: 'sh5', scene: 's2', index: 5, status: 'running', model: 'seedance-2.0', chars: ['c_shen'], keyframe: true, assignee: 'u_qi', tone: 'b', progress: 62, prompt: mkPrompt({ visual: '长街空寂，红灯笼在雨中摇晃，沈砚撑伞缓行，地面水洼倒映身影', cameraPosition: '全景·跟拍', cameraMovement: '横向轨道跟移', soundEffects: '脚步踏水、灯笼吱呀' }), params: mkParams({ duration: 6, generateAudio: true }) },
@@ -119,6 +119,19 @@ export const audit: AuditEntry[] = [
   { id: 'a5', actor: 'u_lin', action: 'credential.write', target: '火山方舟 凭据', diff: '更新 APIKey（密文）', time: mins(300), src: 'Web' },
   { id: 'a6', actor: 'u_lin', action: 'billing.topup', target: '团队钱包', diff: '+ 50,000 积分', time: mins(1440), src: 'Web' },
 ];
+
+export const assets: Asset[] = (() => {
+  const raw: [Asset['kind'], Tone, string][] = [
+    ['image', 'a', '320 KB'], ['video', 'b', '12.4 MB'], ['audio', 'c', '1.8 MB'], ['video', 'd', '8.9 MB'],
+    ['image', 'b', '512 KB'], ['video', 'a', '15.1 MB'], ['image', 'c', '288 KB'], ['video', 'd', '6.2 MB'],
+    ['audio', 'a', '2.4 MB'], ['video', 'b', '9.7 MB'], ['image', 'd', '440 KB'], ['video', 'c', '11.0 MB'],
+  ];
+  const ext: Record<Asset['kind'], string> = { image: 'png', video: 'mp4', audio: 'mp3' };
+  const label: Record<Asset['kind'], string> = { image: 'IMG', video: 'VIDEO', audio: 'AUDIO' };
+  return raw.map(([kind, tone, size], i) => ({
+    id: 'as_' + (i + 1), name: `${label[kind]}_${String(i + 1).padStart(3, '0')}`, kind, ext: ext[kind], tone, store: 'R2', size, created: mins(30 + i * 47),
+  }));
+})();
 
 export const nameOf = (id: string) => members.find((m) => m.id === id)?.name || '—';
 export const charOf = (id: string) => characters.find((c) => c.id === id);

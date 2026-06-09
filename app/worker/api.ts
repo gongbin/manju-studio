@@ -15,6 +15,15 @@ import type { BreakdownResult } from '../src/lib/breakdown';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
+// Map known 火山 Ark errors to a clear, actionable Chinese message for the task.
+function friendlyArkError(raw: string): string {
+  if (/SensitiveContent|PrivacyInformation|real person|真人/i.test(raw)) return '参考图疑似包含真人，被火山内容安全拦截。请改用非真人参考图（插画 / 场景 / AI 生成角色），或使用火山已授权的公共人像资产。';
+  if (/invalid asset uri|InvalidParameter/i.test(raw)) return '参数无效：多为参考图 URL 无法公开访问或资产未注册。请用可公开访问的 https 图片链接。';
+  if (/Unauthorized|InvalidApiKey|401|403|AccessDenied/i.test(raw)) return '火山 API Key 无效或无权限，请在「设置 · Provider 凭据 · 火山数据面」更新 Key。';
+  if (/model/i.test(raw) && /(not|invalid|exist)/i.test(raw)) return '模型 ID 不存在或无权限，请确认你的火山模型 / 接入点 id。';
+  return raw.slice(0, 220);
+}
+
 export const api = new Hono<{ Bindings: Env }>();
 api.use('/api/*', cors());
 
@@ -367,7 +376,7 @@ api.post('/api/shots/generate', async (c) => {
       if (pt) { ptid = pt.providerTaskId; real = true; }
     } catch (e) {
       // Real Ark submission failed — surface it on the task instead of silently simulating.
-      if (arkKey) { taskError = String(e instanceof Error ? e.message : e); console.error('[shots/generate] Ark create failed', taskError); }
+      if (arkKey) { const rawErr = String(e instanceof Error ? e.message : e); console.error('[shots/generate] Ark create failed', rawErr); taskError = friendlyArkError(rawErr); }
     }
     const initState = taskError ? 'failed' : 'queued';
     await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: shot.scene, cap, model: shot.model || model, provider: 'volcengine', ptid, state: initState, progress: 0, cost: per, by: actor, error: taskError, created: ids.now(), updated: ids.now() });

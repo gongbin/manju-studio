@@ -260,13 +260,12 @@ api.post('/api/shots/generate', async (c) => {
   const per = Math.round(total / Math.max(1, shotIds.length));
   // Ark key: platform-configured (火山 数据面) first, then env fallback. Null → simulate.
   const arkKey = (await credentialKey(c.env, 'video')) ?? c.env.VOLC_ARK_API_KEY ?? null;
-  let n = 8830;
   const created: { id: string; shot: string; ptid: string; real: boolean }[] = [];
   for (const sid of shotIds) {
     const shot = await db.select().from(S.shots).where(eq(S.shots.id, sid)).get();
     if (!shot) continue;
     const cap = shot.refs?.images?.length || shot.keyframe ? 'image-to-video' : 'text-to-video';
-    const taskId = `tk_${n++}`;
+    const taskId = ids.uid('tk');
     let ptid = `cgt-${Math.random().toString(16).slice(2, 8)}`;
     let real = false;
     let taskError: string | null = null;
@@ -304,7 +303,7 @@ api.post('/api/shots/:id/enhance', async (c) => {
   if (!shot) return c.json({ error: 'not found' }, 404);
   const ok = await hold(db, TEAM_ID, cost, { type: 'enhance', id: sid }, actor);
   if (!ok) return c.json({ error: '积分不足' }, 402);
-  const taskId = `tk_${Math.floor(Math.random() * 9000) + 1000}`;
+  const taskId = ids.uid('tk');
   await db.update(S.shots).set({ enhance: { status: 'queued', type, res, progress: 0 }, updated: ids.now() }).where(eq(S.shots.id, sid));
   await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: 'e3', cap: 'video-enhance', model: 'cv-mediakit', provider: 'volcengine', ptid: `enh-${Math.random().toString(16).slice(2, 8)}`, state: 'queued', progress: 0, cost, by: actor, created: ids.now(), updated: ids.now() });
   await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });

@@ -123,6 +123,8 @@ export interface EnhanceState {
   type?: string;
   res?: string;
   progress?: number;
+  videoUrl?: string;
+  error?: string;
 }
 
 export interface Shot {

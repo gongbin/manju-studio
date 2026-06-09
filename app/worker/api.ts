@@ -9,6 +9,7 @@ import { audit, hold, ids, providerKey, refund } from './services';
 import { registry, runBreakdown } from './providers';
 import { encryptSecret, encKeyOf, hashPassword, verifyPassword } from './crypto';
 import { ensureSchema } from './ensure-schema';
+import { submitEnhance } from './enhance';
 import type { Context } from 'hono';
 import { models as MODELS } from '../src/lib/mock';
 import type { BreakdownResult } from '../src/lib/breakdown';
@@ -399,18 +400,32 @@ api.post('/api/shots/:id/enhance', async (c) => {
   const ok = await hold(db, TEAM_ID, cost, { type: 'enhance', id: sid }, actor);
   if (!ok) return c.json({ error: '积分不足' }, 402);
   const taskId = ids.uid('tk');
-  await db.update(S.shots).set({ enhance: { status: 'queued', type, res, progress: 0 }, updated: ids.now() }).where(eq(S.shots.id, sid));
-  await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: 'e3', cap: 'video-enhance', model: 'cv-mediakit', provider: 'volcengine', ptid: `enh-${Math.random().toString(16).slice(2, 8)}`, state: 'queued', progress: 0, cost, by: actor, created: ids.now(), updated: ids.now() });
-  await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
-  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · 预扣 ${cost}` });
-  return c.json({ ok: true });
+  // CV MediaKit needs control-plane AK/SK (family 'cv', stored as "ak:sk") and a real source video URL.
+  const cv = await credentialKey(c.env, 'cv');
+  let ptid = `enh-sim-${Math.random().toString(16).slice(2, 8)}`;
+  let real = false;
+  let taskError: string | null = null;
+  if (cv) {
+    if (!shot.videoUrl || !/^https?:\/\//i.test(shot.videoUrl)) taskError = '该镜头没有可增强的视频 URL（需先生成出真实视频）';
+    else {
+      try { ptid = await submitEnhance(cv, { videoUrl: shot.videoUrl, type, targetRes: res }); real = true; }
+      catch (e) { const raw = String(e instanceof Error ? e.message : e); console.error('[shots/enhance] CV submit failed', raw); taskError = friendlyArkError(raw); }
+    }
+  }
+  const initState = taskError ? 'failed' : 'queued';
+  await db.update(S.shots).set({ enhance: { status: taskError ? 'failed' : 'queued', type, res, progress: 0, ...(taskError ? { error: taskError } : {}) }, updated: ids.now() }).where(eq(S.shots.id, sid));
+  await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: shot.scene, cap: 'video-enhance', model: 'cv-mediakit', provider: 'volcengine', ptid, state: initState, progress: 0, cost, by: actor, error: taskError, created: ids.now(), updated: ids.now() });
+  if (taskError) await refund(db, TEAM_ID, cost, { type: 'enhance', id: taskId });
+  else await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
+  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · ${real ? 'CV task ' + ptid : cv ? '失败' : '模拟'} · 预扣 ${cost}` });
+  return c.json({ ok: true, mode: cv ? 'cv-mediakit' : 'simulation', taskId, ptid, real });
 });
 
 /* ---------------- provider credentials (platform-configured keys) ---------------- */
 api.get('/api/credentials', async (c) => {
   const rows = await getDb(c.env).select().from(S.providerCredentials).where(eq(S.providerCredentials.teamId, TEAM_ID)).all();
   const fam = (f: string) => { const r = rows.find((x) => x.family === f && x.secretCiphertext); return r ? { set: true, hint: r.label ?? '' } : { set: false, hint: '' }; };
-  return c.json({ llm: fam('llm'), tts: fam('tts'), video: fam('video') });
+  return c.json({ llm: fam('llm'), tts: fam('tts'), video: fam('video'), cv: fam('cv') });
 });
 
 api.put('/api/credentials/:family', async (c) => {

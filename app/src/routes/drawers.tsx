@@ -325,6 +325,20 @@ export function EnhanceDrawer({ shot, onClose }: { shot: Shot; onClose: () => vo
           </div>
         )}
 
+        {done && enh!.videoUrl && (
+          <div className="card" style={{ padding: 12, borderColor: 'var(--st-done)', background: 'var(--st-done-bg)' }}>
+            <div className="row gap8" style={{ fontSize: 13 }}><span style={{ color: 'var(--st-done)', display: 'inline-flex' }}><Icon name="check" size={15} /></span><b>增强完成 · {enh!.res}</b><span className="grow" /><button className="btn btn-soft btn-sm" onClick={() => window.open(enh!.videoUrl, '_blank')}><Icon name="download" size={13} />下载增强视频</button></div>
+            <div className="mono faint ellipsis" style={{ fontSize: 10.5, marginTop: 6 }} title={enh!.videoUrl}>{enh!.videoUrl}</div>
+          </div>
+        )}
+
+        {enh?.status === 'failed' && (
+          <div className="card" style={{ padding: 12, borderColor: 'var(--st-failed)', background: 'var(--st-failed-bg)' }}>
+            <div className="row gap8" style={{ fontSize: 13, color: 'var(--st-failed)' }}><Icon name="warn" size={15} /><b>增强失败</b></div>
+            <div className="faint" style={{ fontSize: 11.5, marginTop: 4 }}>{enh.error || '请检查源视频是否为可公开访问的 URL，以及控制面 AK/SK 是否正确。'}</div>
+          </div>
+        )}
+
         <div>
           <div className="lbl">增强类型 Enhance Type</div>
           <div className="col gap8">

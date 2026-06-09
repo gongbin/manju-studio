@@ -49,7 +49,7 @@ const store = {
   members: mock.members.map((m) => ({ ...m })) as Member[],
   invites: [] as Invite[],
   scenes: mock.scenes.map((s) => ({ ...s })) as Scene[],
-  creds: { llm: { set: false, hint: '' }, tts: { set: false, hint: '' }, video: { set: false, hint: '' } } as Record<string, { set: boolean; hint: string }>,
+  creds: { llm: { set: false, hint: '' }, tts: { set: false, hint: '' }, video: { set: false, hint: '' }, cv: { set: false, hint: '' } } as Record<string, { set: boolean; hint: string }>,
 };
 
 export type CredStatus = Record<string, { set: boolean; hint: string }>;

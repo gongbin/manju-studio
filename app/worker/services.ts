@@ -4,6 +4,7 @@ import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import * as S from './db/schema';
 import type { Env } from './env';
 import { registry } from './providers';
+import { getEnhance } from './enhance';
 import { decryptSecret, encKeyOf } from './crypto';
 
 type Db = DrizzleD1Database<typeof S>;
@@ -52,15 +53,15 @@ export async function refund(db: Db, teamId: string, amount: number, ref: { type
 export async function advanceTask(db: Db, env: Env, taskId: string, teamId: string): Promise<'queued' | 'running' | 'succeeded' | 'failed'> {
   const t = await db.select().from(S.generationTasks).where(and(eq(S.generationTasks.id, taskId), eq(S.generationTasks.teamId, teamId))).get();
   if (!t || t.state === 'succeeded' || t.state === 'failed') return (t?.state as 'succeeded') ?? 'failed';
+  if (t.cap === 'video-enhance') return advanceEnhance(db, env, teamId, t);
 
-  const isEnhance = t.cap === 'video-enhance';
   let next = t.progress;
   let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';
   let videoUrl: string | null = null;
 
   // Real provider path — key from platform config (video) or env fallback.
   const arkKey = (await providerKey(db, teamId, env, 'video')) ?? env.VOLC_ARK_API_KEY ?? null;
-  if (arkKey && !isEnhance && t.ptid) {
+  if (arkKey && t.ptid) {
     try {
       const pt = await registry.videoProvider()!.getTask(t.ptid, arkKey);
       state = pt.state;
@@ -79,19 +80,45 @@ export async function advanceTask(db: Db, env: Env, taskId: string, teamId: stri
     else { next = Math.min(100, t.progress + Math.round(7 + Math.random() * 12)); state = next >= 100 ? 'succeeded' : 'running'; }
   }
 
-  // On success, surface the generated video URL keyed by the (provider) task id.
-  if (state === 'succeeded' && !isEnhance && !videoUrl) videoUrl = `https://demo.cdn/manju/${t.shot}.mp4`;
+  if (state === 'succeeded' && !videoUrl) videoUrl = `https://demo.cdn/manju/${t.shot}.mp4`;
 
   await db.update(S.generationTasks).set({ state, progress: next, ...(videoUrl ? { videoUrl } : {}), updated: now() }).where(eq(S.generationTasks.id, taskId));
+  await db.update(S.shots).set({ status: state === 'succeeded' ? 'generated' : 'running', progress: next, keyframe: true, ...(videoUrl ? { videoUrl } : {}), updated: now() }).where(eq(S.shots.id, t.shot));
+  return state;
+}
 
-  if (isEnhance) {
-    const shot = await db.select().from(S.shots).where(eq(S.shots.id, t.shot)).get();
-    const enh = shot?.enhance ?? { status: 'processing' as const };
-    await db.update(S.shots).set({ enhance: { ...enh, status: state === 'succeeded' ? 'succeeded' : 'processing', progress: next }, updated: now() }).where(eq(S.shots.id, t.shot));
+type EnhTask = NonNullable<Awaited<ReturnType<typeof getTaskRow>>>;
+const getTaskRow = (db: Db, teamId: string, id: string) =>
+  db.select().from(S.generationTasks).where(and(eq(S.generationTasks.id, id), eq(S.generationTasks.teamId, teamId))).get();
+
+/** 画质增强: poll 火山 CV MediaKit (real) when AK/SK present, else simulate. Writes back the enhanced video URL on success. */
+async function advanceEnhance(db: Db, env: Env, teamId: string, t: EnhTask): Promise<'queued' | 'running' | 'succeeded' | 'failed'> {
+  const cv = (await providerKey(db, teamId, env, 'cv')) ?? null;
+  const real = !!cv && !!t.ptid && !t.ptid.startsWith('enh-sim');
+  let next = t.progress;
+  let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';
+  let videoUrl: string | null = null;
+  let error: string | null = null;
+
+  if (real) {
+    try {
+      const r = await getEnhance(cv!, t.ptid!);
+      state = r.state === 'succeeded' ? 'succeeded' : r.state === 'failed' ? 'failed' : 'running';
+      next = r.progress ?? next;
+      if (r.videoUrl) videoUrl = r.videoUrl;
+      if (r.error) error = r.error;
+    } catch (e) { state = 'failed'; error = String(e instanceof Error ? e.message : e); }
   } else {
-    await db.update(S.shots).set({ status: state === 'succeeded' ? 'generated' : 'running', progress: next, keyframe: true, ...(videoUrl ? { videoUrl } : {}), updated: now() }).where(eq(S.shots.id, t.shot));
+    if (t.state === 'queued') { state = 'running'; next = 5; }
+    else { next = Math.min(100, t.progress + Math.round(7 + Math.random() * 12)); state = next >= 100 ? 'succeeded' : 'running'; }
+    if (state === 'succeeded') videoUrl = `https://demo.cdn/manju/${t.shot}-enh.mp4`;
   }
 
+  await db.update(S.generationTasks).set({ state, progress: next, ...(videoUrl ? { videoUrl } : {}), ...(error ? { error } : {}), updated: now() }).where(eq(S.generationTasks.id, t.id));
+  const shot = await db.select().from(S.shots).where(eq(S.shots.id, t.shot)).get();
+  const enh = shot?.enhance ?? { status: 'processing' as const };
+  await db.update(S.shots).set({ enhance: { ...enh, status: state === 'succeeded' ? 'succeeded' : state === 'failed' ? 'failed' : 'processing', progress: next, ...(videoUrl ? { videoUrl } : {}), ...(error ? { error } : {}) }, updated: now() }).where(eq(S.shots.id, t.shot));
+  if (state === 'failed') await refund(db, teamId, t.cost, { type: 'enhance', id: t.id });
   return state;
 }
 

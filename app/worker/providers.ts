@@ -46,14 +46,16 @@ export class VolcengineProvider implements VideoProvider {
   async createTask(input: GenerateInput, apiKey: string | null): Promise<ProviderTask | null> {
     if (!apiKey) return null; // no credential → simulate in the queue consumer
 
+    // Ark only accepts publicly-resolvable URLs (https) or a registered asset:// uri.
+    // Drop placeholders like `upload://name` and demo `asset://qm/...` (unregistered)
+    // — otherwise Ark returns 400 "invalid asset uri".
+    const ok = (u: string) => /^https?:\/\//i.test(u);
     const content: unknown[] = [{ type: 'text', text: this.composePrompt(input.prompt) }];
-    for (const url of input.references?.images ?? []) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
-    for (const url of input.references?.videos ?? []) content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
-    for (const url of input.references?.audios ?? []) content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
-    if (input.references?.characterAssetId) {
-      const id = input.references.characterAssetId.startsWith('asset://') ? input.references.characterAssetId : `asset://${input.references.characterAssetId}`;
-      content.push({ type: 'image_url', image_url: { url: id }, role: 'reference_image' });
-    }
+    for (const url of (input.references?.images ?? []).filter(ok)) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
+    for (const url of (input.references?.videos ?? []).filter(ok)) content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
+    for (const url of (input.references?.audios ?? []).filter(ok)) content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
+    const charRef = input.references?.characterAssetId;
+    if (charRef && ok(charRef)) content.push({ type: 'image_url', image_url: { url: charRef }, role: 'reference_image' });
 
     const p = input.params;
     const body: Record<string, unknown> = {
@@ -66,7 +68,7 @@ export class VolcengineProvider implements VideoProvider {
       watermark: p.watermark !== false,
     };
     if (p.webSearch) body.tools = [{ type: 'web_search' }];
-    console.log('[ark] create', JSON.stringify({ model: body.model, resolution: body.resolution, ratio: body.ratio, duration: body.duration, generate_audio: body.generate_audio, watermark: body.watermark, refImages: input.references?.images?.length ?? 0, refVideos: input.references?.videos?.length ?? 0, refAudios: input.references?.audios?.length ?? 0, charAsset: !!input.references?.characterAssetId, promptChars: (content[0] as { text: string }).text.length }));
+    console.log('[ark] create', JSON.stringify({ model: body.model, resolution: body.resolution, ratio: body.ratio, duration: body.duration, generate_audio: body.generate_audio, watermark: body.watermark, injectedRefs: content.length - 1, promptChars: (content[0] as { text: string }).text.length }));
 
     const res = await fetch(`${ARK_BASE}/contents/generations/tasks`, {
       method: 'POST',

@@ -202,7 +202,9 @@ function SceneRows({ sc, shots, sel, toggle, update, openGenerate, setEnhShot }:
             <td>
               <StatusPill status={s.status} />
               {s.status === 'failed' && s.error && <div className="faint" style={{ fontSize: 10.5, marginTop: 3, color: 'var(--st-failed)' }}>{s.error}</div>}
-              {s.enhance?.status === 'succeeded' && <div style={{ marginTop: 4 }}><span className="pill" style={{ color: 'var(--accent-text)', background: 'var(--accent-soft)' }}><Icon name="bolt" size={11} />已增强 {s.enhance.res}</span></div>}
+              {s.enhance?.status === 'succeeded' && <div style={{ marginTop: 4 }}>{s.enhance.videoUrl
+                ? <button className="pill" title="下载增强视频" onClick={() => window.open(s.enhance!.videoUrl!, '_blank')} style={{ color: 'var(--accent-text)', background: 'var(--accent-soft)', border: 'none', cursor: 'pointer' }}><Icon name="bolt" size={11} />已增强 {s.enhance.res}<Icon name="download" size={11} /></button>
+                : <span className="pill" style={{ color: 'var(--accent-text)', background: 'var(--accent-soft)' }}><Icon name="bolt" size={11} />已增强 {s.enhance.res}</span>}</div>}
               {(s.enhance?.status === 'processing' || s.enhance?.status === 'queued') && <div style={{ marginTop: 4 }}><span className="pill" style={{ color: 'var(--st-running)', background: 'var(--st-running-bg)' }}><span className="dot" style={{ animation: 'pulse 1.2s infinite' }} />增强 {s.enhance.progress || 0}%</span></div>}
             </td>
             <td className="mono faint" style={{ fontSize: 11 }}>{s.model.replace('seedance-', 'sd-')}</td>
@@ -212,6 +214,7 @@ function SceneRows({ sc, shots, sel, toggle, update, openGenerate, setEnhShot }:
                   ['draft', 'failed'].includes(s.status) ? { icon: 'sparkle', label: '提交生成', onClick: () => openGenerate([s.id]) } : null,
                   s.status === 'failed' ? { icon: 'retry', label: '重试', onClick: () => openGenerate([s.id]) } : null,
                   s.status === 'generated' ? { icon: 'download', label: '下载视频', onClick: () => s.videoUrl && window.open(s.videoUrl, '_blank') } : null,
+                  s.enhance?.status === 'succeeded' && s.enhance.videoUrl ? { icon: 'download', label: `下载增强视频 ${s.enhance.res || ''}`.trim(), onClick: () => window.open(s.enhance!.videoUrl!, '_blank') } : null,
                   s.status === 'generated' ? { icon: 'bolt', label: s.enhance?.status === 'succeeded' ? '重新增强' : '视频增强', onClick: () => setEnhShot(s) } : null,
                   s.status === 'generated' ? { icon: 'mic', label: 'TTS 配音' } : null,
                   { icon: 'copy', label: '复制镜头' },
@@ -249,7 +252,9 @@ function ShotCard({ s, sel, toggle, openGenerate, setEnhShot }: { s: Shot; sel: 
           {['draft', 'failed'].includes(s.status)
             ? <button className="btn btn-pri btn-sm grow" onClick={() => openGenerate([s.id])}><Icon name={s.status === 'failed' ? 'retry' : 'sparkle'} size={13} />{s.status === 'failed' ? '重试' : '生成'}</button>
             : s.status === 'generated'
-              ? <><button className="btn btn-soft btn-sm grow" onClick={() => s.videoUrl && window.open(s.videoUrl, '_blank')}><Icon name="download" size={13} />下载</button><button className="btn btn-ghost btn-sm btn-icon" title="视频增强" onClick={() => setEnhShot(s)}><Icon name="bolt" size={15} /></button></>
+              ? <>{s.enhance?.status === 'succeeded' && s.enhance.videoUrl
+                  ? <button className="btn btn-soft btn-sm grow" title={`下载增强视频 ${s.enhance.res || ''}`.trim()} onClick={() => window.open(s.enhance!.videoUrl!, '_blank')}><Icon name="bolt" size={13} />下载增强{s.enhance.res ? ` ${s.enhance.res}` : ''}</button>
+                  : <button className="btn btn-soft btn-sm grow" onClick={() => s.videoUrl && window.open(s.videoUrl, '_blank')}><Icon name="download" size={13} />下载</button>}<button className="btn btn-ghost btn-sm btn-icon" title="视频增强" onClick={() => setEnhShot(s)}><Icon name="bolt" size={15} /></button></>
               : <button className="btn btn-soft btn-sm grow" disabled><Icon name="refresh" size={13} className="spin" />生成中 {s.progress || 0}%</button>}
           <button className="btn btn-ghost btn-sm btn-icon"><Icon name="more" size={15} /></button>
         </div>

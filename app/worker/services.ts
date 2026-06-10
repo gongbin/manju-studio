@@ -91,10 +91,11 @@ type EnhTask = NonNullable<Awaited<ReturnType<typeof getTaskRow>>>;
 const getTaskRow = (db: Db, teamId: string, id: string) =>
   db.select().from(S.generationTasks).where(and(eq(S.generationTasks.id, id), eq(S.generationTasks.teamId, teamId))).get();
 
-/** 画质增强: poll 火山 CV MediaKit (real) when AK/SK present, else simulate. Writes back the enhanced video URL on success. */
+/** 画质增强: poll 火山 AI MediaKit (real) when the Ark API Key is present, else simulate. Writes back the enhanced video URL on success. */
 async function advanceEnhance(db: Db, env: Env, teamId: string, t: EnhTask): Promise<'queued' | 'running' | 'succeeded' | 'failed'> {
-  const cv = (await providerKey(db, teamId, env, 'cv')) ?? null;
-  const real = !!cv && !!t.ptid && !t.ptid.startsWith('enh-sim');
+  // MediaKit reuses the data-plane Ark API Key (same Bearer key as video generation).
+  const key = (await providerKey(db, teamId, env, 'video')) ?? env.VOLC_ARK_API_KEY ?? null;
+  const real = !!key && !!t.ptid && !t.ptid.startsWith('enh-sim');
   let next = t.progress;
   let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';
   let videoUrl: string | null = null;
@@ -102,7 +103,7 @@ async function advanceEnhance(db: Db, env: Env, teamId: string, t: EnhTask): Pro
 
   if (real) {
     try {
-      const r = await getEnhance(cv!, t.ptid!);
+      const r = await getEnhance(key!, t.ptid!);
       state = r.state === 'succeeded' ? 'succeeded' : r.state === 'failed' ? 'failed' : 'running';
       next = r.progress ?? next;
       if (r.videoUrl) videoUrl = r.videoUrl;

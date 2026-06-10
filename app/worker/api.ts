@@ -400,15 +400,15 @@ api.post('/api/shots/:id/enhance', async (c) => {
   const ok = await hold(db, TEAM_ID, cost, { type: 'enhance', id: sid }, actor);
   if (!ok) return c.json({ error: '积分不足' }, 402);
   const taskId = ids.uid('tk');
-  // AI MediaKit reuses the data-plane Ark API Key (same Bearer key as generation) and a real source video URL.
-  const arkKey = (await credentialKey(c.env, 'video')) ?? c.env.VOLC_ARK_API_KEY ?? null;
+  // AI MediaKit 画质增强 is a separate API with its own Bearer key (family 'mediakit').
+  const mkKey = await credentialKey(c.env, 'mediakit');
   let ptid = `enh-sim-${Math.random().toString(16).slice(2, 8)}`;
   let real = false;
   let taskError: string | null = null;
-  if (arkKey) {
+  if (mkKey) {
     if (!shot.videoUrl || !/^https?:\/\//i.test(shot.videoUrl)) taskError = '该镜头没有可增强的视频 URL（需先生成出真实视频）';
     else {
-      try { ptid = await submitEnhance(arkKey, { videoUrl: shot.videoUrl, scene: 'aigc', targetRes: res }); real = true; }
+      try { ptid = await submitEnhance(mkKey, { videoUrl: shot.videoUrl, scene: 'aigc', targetRes: res }); real = true; }
       catch (e) { const raw = String(e instanceof Error ? e.message : e); console.error('[shots/enhance] MediaKit submit failed', raw); taskError = friendlyArkError(raw); }
     }
   }
@@ -417,15 +417,15 @@ api.post('/api/shots/:id/enhance', async (c) => {
   await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: shot.scene, cap: 'video-enhance', model: 'mediakit-enhance', provider: 'volcengine', ptid, state: initState, progress: 0, cost, by: actor, error: taskError, created: ids.now(), updated: ids.now() });
   if (taskError) await refund(db, TEAM_ID, cost, { type: 'enhance', id: taskId });
   else await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
-  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · ${real ? 'MediaKit task ' + ptid : arkKey ? '失败' : '模拟'} · 预扣 ${cost}` });
-  return c.json({ ok: true, mode: arkKey ? 'mediakit' : 'simulation', taskId, ptid, real });
+  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · ${real ? 'MediaKit task ' + ptid : mkKey ? '失败' : '模拟'} · 预扣 ${cost}` });
+  return c.json({ ok: true, mode: mkKey ? 'mediakit' : 'simulation', taskId, ptid, real });
 });
 
 /* ---------------- provider credentials (platform-configured keys) ---------------- */
 api.get('/api/credentials', async (c) => {
   const rows = await getDb(c.env).select().from(S.providerCredentials).where(eq(S.providerCredentials.teamId, TEAM_ID)).all();
   const fam = (f: string) => { const r = rows.find((x) => x.family === f && x.secretCiphertext); return r ? { set: true, hint: r.label ?? '' } : { set: false, hint: '' }; };
-  return c.json({ llm: fam('llm'), tts: fam('tts'), video: fam('video'), cv: fam('cv') });
+  return c.json({ llm: fam('llm'), tts: fam('tts'), video: fam('video'), cv: fam('cv'), mediakit: fam('mediakit') });
 });
 
 api.put('/api/credentials/:family', async (c) => {

@@ -93,8 +93,8 @@ const getTaskRow = (db: Db, teamId: string, id: string) =>
 
 /** 画质增强: poll 火山 AI MediaKit (real) when the Ark API Key is present, else simulate. Writes back the enhanced video URL on success. */
 async function advanceEnhance(db: Db, env: Env, teamId: string, t: EnhTask): Promise<'queued' | 'running' | 'succeeded' | 'failed'> {
-  // MediaKit reuses the data-plane Ark API Key (same Bearer key as video generation).
-  const key = (await providerKey(db, teamId, env, 'video')) ?? env.VOLC_ARK_API_KEY ?? null;
+  // 画质增强 uses its own dedicated AI MediaKit Bearer key (family 'mediakit').
+  const key = (await providerKey(db, teamId, env, 'mediakit')) ?? null;
   const real = !!key && !!t.ptid && !t.ptid.startsWith('enh-sim');
   let next = t.progress;
   let state: 'queued' | 'running' | 'succeeded' | 'failed' = t.state as 'running';

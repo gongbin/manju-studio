@@ -226,6 +226,10 @@ textarea.field { height: auto; padding: 9px 11px; resize: vertical; line-height:
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+/* App-wide top loading bar (react-query fetching / mutating). */
+.global-loadbar { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 9999; background: var(--accent-soft); overflow: hidden; pointer-events: none; }
+.global-loadbar::before { content: ''; position: absolute; top: 0; bottom: 0; width: 35%; background: var(--accent); border-radius: 2px; animation: loadbar 1.1s ease-in-out infinite; }
+@keyframes loadbar { 0% { left: -35%; } 60% { left: 100%; } 100% { left: 100%; } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } }
 .rise { animation: riseIn 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 

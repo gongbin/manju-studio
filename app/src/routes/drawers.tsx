@@ -117,6 +117,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   const [beats, setBeats] = useState<TimeBeat[]>(() => (shots[0]?.beats ?? []).map((b) => ({ ...b })));
   const [refs, setRefs] = useState<Record<string, Buckets>>(() => Object.fromEntries(shots.map((sh) => [sh.id, emptyBuckets()])));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(shots.length === 1 ? [shots[0].id] : []));
+  const [submitting, setSubmitting] = useState(false);
   // 角色一致性：可勾选的主角（默认预选所选镜头里、且已绑定参考图的角色）。
   const isCharUrl = (u?: string) => !!u && /^https?:\/\//i.test(u);
   const shotCharIds = new Set(shots.flatMap((sh) => sh.chars));
@@ -145,23 +146,30 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   };
 
   const submit = async () => {
-    const toUrls = (items: RefItem[]) => items.map((i) => i.url);
-    const refsPayload: Record<string, ShotRefs> = {};
-    for (const sh of shots) { const b = refs[sh.id] ?? emptyBuckets(); refsPayload[sh.id] = { images: toUrls(b.images), videos: toUrls(b.videos), audios: toUrls(b.audios) }; }
-    for (const sh of shots) {
-      const patch: Partial<Shot> = {
-        params: { ...sh.params, resolution: res, ratio: ratio === 'adaptive' ? sh.params.ratio : ratio, generateAudio: !!audio, watermark: !!wm, ...(dur !== 'smart' ? { duration: Number(dur) } : {}) },
-        refs: refsPayload[sh.id],
-      };
-      if (single) { patch.prompt = { ...prompt } as Shot['prompt']; patch.beats = beats; }
-      await api.updateShot(sh.id, patch);
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const toUrls = (items: RefItem[]) => items.map((i) => i.url);
+      const refsPayload: Record<string, ShotRefs> = {};
+      for (const sh of shots) { const b = refs[sh.id] ?? emptyBuckets(); refsPayload[sh.id] = { images: toUrls(b.images), videos: toUrls(b.videos), audios: toUrls(b.audios) }; }
+      for (const sh of shots) {
+        const patch: Partial<Shot> = {
+          params: { ...sh.params, resolution: res, ratio: ratio === 'adaptive' ? sh.params.ratio : ratio, generateAudio: !!audio, watermark: !!wm, ...(dur !== 'smart' ? { duration: Number(dur) } : {}) },
+          refs: refsPayload[sh.id],
+        };
+        if (single) { patch.prompt = { ...prompt } as Shot['prompt']; patch.beats = beats; }
+        await api.updateShot(sh.id, patch);
+      }
+      await api.submitGenerate(shots.map((sh) => sh.id), { model: modelId, resolution: res, ratio, duration: dur, generateAudio: !!audio, watermark: !!wm }, totalCredits, refsPayload, model.charAsset ? [...selChars] : undefined);
+      qc.invalidateQueries({ queryKey: ['shots'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['wallet'] });
+      toast(`已分次提交 ${shots.length} 个生成任务 · 预扣 ${yuan(totalYuan)}（${fmt.credits(totalCredits)} 积分）`, 'sparkle');
+      onClose();
+    } catch (e) {
+      setSubmitting(false);
+      toast('提交失败：' + (e instanceof Error ? e.message : e), 'warn');
     }
-    await api.submitGenerate(shots.map((sh) => sh.id), { model: modelId, resolution: res, ratio, duration: dur, generateAudio: !!audio, watermark: !!wm }, totalCredits, refsPayload, model.charAsset ? [...selChars] : undefined);
-    qc.invalidateQueries({ queryKey: ['shots'] });
-    qc.invalidateQueries({ queryKey: ['tasks'] });
-    qc.invalidateQueries({ queryKey: ['wallet'] });
-    toast(`已分次提交 ${shots.length} 个生成任务 · 预扣 ${yuan(totalYuan)}（${fmt.credits(totalCredits)} 积分）`, 'sparkle');
-    onClose();
   };
 
   const P = (k: keyof typeof prompt, v: string) => setPrompt((p) => ({ ...p, [k]: v }));
@@ -298,8 +306,8 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
           <div style={{ textAlign: 'right', fontSize: 12 }}><div className="faint">钱包余额</div><div className="mono" style={{ fontWeight: 600 }}>{fmt.credits(wallet.balance)} 积分</div></div>
         </div>
         <div className="row gap8">
-          <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
-          <button className="btn btn-pri grow" onClick={submit}><Icon name="sparkle" size={16} />逐条提交 · {yuan(totalYuan)}</button>
+          <button className="btn btn-ghost grow" onClick={onClose} disabled={submitting}>取消</button>
+          <button className="btn btn-pri grow" onClick={submit} disabled={submitting}>{submitting ? <><Icon name="refresh" size={16} className="spin" />提交中…</> : <><Icon name="sparkle" size={16} />逐条提交 · {yuan(totalYuan)}</>}</button>
         </div>
       </div>
     </Drawer>
@@ -323,14 +331,22 @@ export function EnhanceDrawer({ shot, onClose }: { shot: Shot; onClose: () => vo
   const cost = Math.round(80 * ENH_RES_MULT[res] * tMult);
   const busy = enh && (enh.status === 'queued' || enh.status === 'processing');
   const done = enh && enh.status === 'succeeded';
+  const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
-    await api.submitEnhance(shot.id, { type, res }, cost);
-    qc.invalidateQueries({ queryKey: ['shots'] });
-    qc.invalidateQueries({ queryKey: ['tasks'] });
-    qc.invalidateQueries({ queryKey: ['wallet'] });
-    toast(`已提交视频增强 · ${res} ${type} · 预扣 ${cost} 积分`, 'bolt');
-    onClose();
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await api.submitEnhance(shot.id, { type, res }, cost);
+      qc.invalidateQueries({ queryKey: ['shots'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['wallet'] });
+      toast(`已提交视频增强 · ${res} ${type} · 预扣 ${cost} 积分`, 'bolt');
+      onClose();
+    } catch (e) {
+      setSubmitting(false);
+      toast('提交失败：' + (e instanceof Error ? e.message : e), 'warn');
+    }
   };
 
   return (
@@ -402,7 +418,7 @@ export function EnhanceDrawer({ shot, onClose }: { shot: Shot; onClose: () => vo
         </div>
         <div className="row gap8">
           <button className="btn btn-ghost grow" onClick={onClose}>{done ? '关闭' : '取消'}</button>
-          <button className="btn btn-pri grow" disabled={!!busy} onClick={submit}><Icon name={busy ? 'refresh' : done ? 'retry' : 'bolt'} size={16} className={busy ? 'spin' : ''} />{busy ? '增强中…' : done ? '重新增强' : '提交增强 · 预扣 ' + fmt.credits(cost)}</button>
+          <button className="btn btn-pri grow" disabled={!!busy || submitting} onClick={submit}><Icon name={busy || submitting ? 'refresh' : done ? 'retry' : 'bolt'} size={16} className={busy || submitting ? 'spin' : ''} />{submitting ? '提交中…' : busy ? '增强中…' : done ? '重新增强' : '提交增强 · 预扣 ' + fmt.credits(cost)}</button>
         </div>
       </div>
     </Drawer>

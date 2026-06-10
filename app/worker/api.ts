@@ -175,6 +175,18 @@ api.post('/api/episodes', async (c) => {
   return c.json({ id });
 });
 
+// 保存某集剧本（按 episode 区分，可编辑持久化）。
+api.put('/api/episodes/:id/script', async (c) => {
+  const id = c.req.param('id');
+  const { script } = await c.req.json<{ script: string }>();
+  const db = getDb(c.env);
+  const ep = await db.select().from(S.episodes).where(and(eq(S.episodes.id, id), eq(S.episodes.teamId, TEAM_ID))).get();
+  if (!ep) return c.json({ error: 'not found' }, 404);
+  await db.update(S.episodes).set({ script: script ?? '', updated: ids.now() }).where(and(eq(S.episodes.id, id), eq(S.episodes.teamId, TEAM_ID)));
+  await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'episode.script', target: `EP${pad2(ep.index)} · ${ep.title}`, diff: `保存剧本 · ${(script ?? '').length} 字` });
+  return c.json({ ok: true });
+});
+
 api.post('/api/characters', async (c) => {
   const d = await c.req.json<{ name: string; tag?: string; tone?: string; voice?: string; desc?: string; assetUrl?: string; project?: string }>();
   const db = getDb(c.env);

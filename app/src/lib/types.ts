@@ -73,6 +73,7 @@ export interface Episode {
   done: number;
   updated: string;
   assignee: string | null;
+  script?: string;
 }
 
 export interface Scene {

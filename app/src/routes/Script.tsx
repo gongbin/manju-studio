@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
@@ -9,7 +9,7 @@ import { StatusPill } from '@/ui/primitives';
 import { toast } from '@/ui/toast';
 import { EP_STATUS } from '@/lib/status';
 import { fmt } from '@/lib/format';
-import { projects as pSeed, episodes as eSeed, scriptContent, nameOf } from '@/lib/mock';
+import { projects as pSeed, episodes as eSeed, nameOf } from '@/lib/mock';
 import { api } from '@/lib/api';
 import { useSettings, settingsStore, activeLlm } from '@/lib/settings';
 import { DEFAULT_BREAKDOWN_PROMPT, type BreakdownResult } from '@/lib/breakdown';
@@ -47,15 +47,22 @@ export function Script() {
   const s = useSettings();
   const fileRef = useRef<HTMLInputElement>(null);
   const { projectId, episodeId } = useParams({ strict: false }) as { projectId: string; episodeId: string };
-  const p = pSeed.find((x) => x.id === projectId) || pSeed[0];
-  const ep = eSeed.find((e) => e.id === episodeId) || eSeed[2];
+  const { data: projects = pSeed } = useQuery({ queryKey: ['projects'], queryFn: api.listProjects, initialData: pSeed });
+  const { data: episodes = eSeed } = useQuery({ queryKey: ['episodes'], queryFn: api.listEpisodes, initialData: eSeed });
+  const p = projects.find((x) => x.id === projectId) || projects[0];
+  const ep = episodes.find((e) => e.id === episodeId) || episodes[0];
 
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [text, setText] = useState(scriptContent);
+  const [text, setText] = useState(ep.script ?? '');
+  const [savedText, setSavedText] = useState(ep.script ?? '');
+  const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<BreakdownResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
+  // 切换剧集时载入该集剧本（避免覆盖正在编辑的内容：仅在 episode 变化时重置）。
+  useEffect(() => { setText(ep.script ?? ''); setSavedText(ep.script ?? ''); setPhase('idle'); setResult(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ep.id]);
+  const dirty = text !== savedText;
 
   const prov = activeLlm(s);
   const model = s.breakdown.model;
@@ -83,6 +90,16 @@ export function Script() {
       navigate({ to: '/project/$projectId/$episodeId/storyboard', params: { projectId: p.id, episodeId: ep.id } });
     } catch (e) { toast('应用失败：' + (e instanceof Error ? e.message : e), 'warn'); setApplying(false); }
   };
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveScript(ep.id, text);
+      setSavedText(text);
+      qc.invalidateQueries({ queryKey: ['episodes'] });
+      toast(`已保存 EP${fmt.pad2(ep.index)} · ${ep.title} 剧本`, 'check');
+    } catch (e) { toast('保存失败：' + (e instanceof Error ? e.message : e), 'warn'); }
+    finally { setSaving(false); }
+  };
   const paste = async () => { try { const t = await navigator.clipboard.readText(); if (t) { setText(t); toast('已粘贴剪贴板文本', 'paste'); } } catch { toast('无法读取剪贴板，请手动粘贴', 'warn'); } };
   const importFile = (f?: File) => { if (!f) return; const r = new FileReader(); r.onload = () => { setText(String(r.result || '')); toast('已导入 ' + f.name, 'import'); }; r.readAsText(f); };
 
@@ -93,13 +110,14 @@ export function Script() {
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         <div className="row gap12 wrap" style={{ padding: '12px 22px', borderBottom: '1px solid var(--line)' }}>
           <div className="grow">
-            <div className="row gap10"><span style={{ fontWeight: 700, fontSize: 16 }}>剧本 · 智能分镜</span><StatusPill status={ep.status} map={EP_STATUS} /></div>
-            <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>v7 · {nameOf('u_qi')} 编辑于 {fmt.ago(ep.updated)}</div>
+            <div className="row gap10"><span style={{ fontWeight: 700, fontSize: 16 }}>EP{fmt.pad2(ep.index)} · {ep.title}</span><StatusPill status={ep.status} map={EP_STATUS} />{dirty && <span className="pill" style={{ color: 'var(--st-review)', background: 'var(--st-review-bg)' }}><Icon name="edit" size={11} />未保存</span>}</div>
+            <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>剧本 · 智能分镜 · {nameOf('u_qi')} 编辑于 {fmt.ago(ep.updated)}</div>
           </div>
           <div className="row gap8">
             <input ref={fileRef} type="file" accept=".txt,.md,.json,text/*" style={{ display: 'none' }} onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
             <button className="btn btn-ghost btn-sm" onClick={paste}><Icon name="paste" size={14} />粘贴文本</button>
             <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}><Icon name="import" size={14} />导入 txt / md / json</button>
+            <button className="btn btn-pri btn-sm" onClick={save} disabled={!dirty || saving}>{saving ? <Icon name="refresh" size={14} className="spin" /> : <Icon name="check" size={14} />}保存剧本</button>
           </div>
         </div>
 

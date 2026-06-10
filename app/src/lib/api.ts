@@ -144,6 +144,13 @@ export const api = {
     );
   },
 
+  async saveScript(episodeId: string, script: string) {
+    return remoteOrLocal(
+      () => req(`/episodes/${episodeId}/script`, { method: 'PUT', body: JSON.stringify({ script }) }),
+      () => { store.episodes = store.episodes.map((e) => (e.id === episodeId ? { ...e, script, updated: new Date().toISOString() } : e)); return { ok: true }; },
+    );
+  },
+
   async addCharacter(data: { name: string; tag: string; tone: string; voice: string; desc: string; assetUrl?: string; project?: string }): Promise<string> {
     return remoteOrLocal(
       async () => (await req<{ id: string }>('/characters', { method: 'POST', body: JSON.stringify(data) })).id,

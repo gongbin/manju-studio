@@ -56,6 +56,7 @@ export const episodes = sqliteTable('episodes', {
   done: integer('done').notNull().default(0),
   updated: text('updated').notNull(),
   assignee: text('assignee'),
+  script: text('script').notNull().default(''),
 });
 
 export const characters = sqliteTable('characters', {

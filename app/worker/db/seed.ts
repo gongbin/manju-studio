@@ -27,7 +27,7 @@ export async function seed(db: DrizzleD1Database<typeof S>) {
 
   await insertEach(mock.projects, (p) => db.insert(S.projects).values({ id: p.id, teamId: TEAM_ID, name: p.name, tone: p.tone, style: p.style, ratio: p.ratio, res: p.res, episodes: p.episodes, status: p.status, synopsis: p.synopsis, members: p.members, updated: p.updated }));
 
-  await insertEach(mock.episodes, (e) => db.insert(S.episodes).values({ id: e.id, teamId: TEAM_ID, project: e.project, index: e.index, title: e.title, status: e.status, shots: e.shots, done: e.done, updated: e.updated, assignee: e.assignee }));
+  await insertEach(mock.episodes, (e) => db.insert(S.episodes).values({ id: e.id, teamId: TEAM_ID, project: e.project, index: e.index, title: e.title, status: e.status, shots: e.shots, done: e.done, updated: e.updated, assignee: e.assignee, script: mock.scripts[e.id] ?? '' }));
 
   await insertEach(mock.characters, (c) => db.insert(S.characters).values({ id: c.id, teamId: TEAM_ID, project: c.project, name: c.name, tone: c.tone, voice: c.voice, tag: c.tag, refs: c.refs, asset: c.asset, desc: c.desc }));
 

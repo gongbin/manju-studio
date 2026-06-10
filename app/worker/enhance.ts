@@ -1,38 +1,43 @@
-// 火山 AI MediaKit 视频画质增强 — Bearer-token REST API (cn-beijing).
-// Credential is the MediaKit API Key (used as `Authorization: Bearer <key>`).
-//   submit → task_id ; poll GET /tasks/{id} → status + result.video_url.
-const MEDIAKIT_HOST = 'https://mediakit.cn-beijing.volces.com';
+// 火山 CV MediaKit 视频画质增强 (control-plane, AK/SK signed) — ports seedance-app.
+// Credential is stored as "ak:sk". submit → TaskId; poll → status + enhanced VideoUrl.
+import { signCv } from './volc-sign';
 
-interface EnhanceResult { video_url?: string; resolution?: string; tool_version?: string }
-interface TaskResponse {
-  success?: boolean;
-  task_id?: string;
-  status?: string;
-  result?: EnhanceResult;
-  message?: string;
-  error?: string | { message?: string };
+const CV_HOST = 'https://cv.volcengineapi.com';
+const VERSION = '2023-07-01';
+const ENHANCE_MODE: Record<string, string> = { standard: 'standard', professional: 'professional', 'ai-model': 'ai_model' };
+
+function splitAkSk(akSk: string): [string, string] {
+  const i = akSk.indexOf(':');
+  return i < 0 ? [akSk, ''] : [akSk.slice(0, i), akSk.slice(i + 1)];
 }
 
-function errMsg(d: TaskResponse, fallback: string): string {
-  if (typeof d.error === 'string') return d.error;
-  if (d.error?.message) return d.error.message;
-  return d.message || fallback;
-}
-
-/** Submit an enhancement task. `scene` defaults to 'aigc' (these shots are AI-generated). Returns task_id. */
-export async function submitEnhance(apiKey: string, opts: { videoUrl: string; scene?: string; targetRes: string }): Promise<string> {
-  const res = await fetch(`${MEDIAKIT_HOST}/api/v1/tools/enhance-video`, {
+async function cvCall(akSk: string, action: string, bodyData: Record<string, unknown>): Promise<{ Result?: Record<string, unknown>; Error?: { Message?: string } }> {
+  const [ak, sk] = splitAkSk(akSk);
+  const params = { Action: action, Version: VERSION };
+  const body = JSON.stringify(bodyData);
+  const headers = await signCv(ak, sk, 'POST', '/', params, body);
+  const res = await fetch(`${CV_HOST}/?Action=${action}&Version=${VERSION}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ video_url: opts.videoUrl, scene: opts.scene ?? 'aigc', resolution: opts.targetRes.toLowerCase() }),
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body,
   });
   const text = await res.text();
-  let data: TaskResponse;
-  try { data = JSON.parse(text); } catch { throw new Error(`MediaKit ${res.status}: ${text.slice(0, 200)}`); }
-  if (!res.ok || data.success === false) throw new Error(errMsg(data, `MediaKit ${res.status}`));
-  const taskId = data.task_id;
-  if (!taskId) throw new Error('MediaKit: no task_id returned');
-  console.log('[mediakit] submit enhance task', taskId);
+  let data: { Result?: Record<string, unknown>; Error?: { Message?: string } };
+  try { data = JSON.parse(text); } catch { throw new Error(`CV ${res.status}: ${text.slice(0, 200)}`); }
+  if (!res.ok && !data.Error) throw new Error(`CV ${res.status}: ${text.slice(0, 200)}`);
+  return data;
+}
+
+export async function submitEnhance(akSk: string, opts: { videoUrl: string; type: string; targetRes: string }): Promise<string> {
+  const data = await cvCall(akSk, 'SubmitVideoEnhanceTask', {
+    VideoUrl: opts.videoUrl,
+    EnhanceMode: ENHANCE_MODE[opts.type] ?? 'standard',
+    TargetResolution: opts.targetRes.toLowerCase(),
+  });
+  if (data.Error) throw new Error(data.Error.Message || 'CV submit error');
+  const taskId = data.Result?.TaskId as string | undefined;
+  if (!taskId) throw new Error('CV: no TaskId returned');
+  console.log('[cv] submit enhance task', taskId);
   return taskId;
 }
 
@@ -42,23 +47,13 @@ export interface EnhanceStatus {
   videoUrl?: string;
   error?: string;
 }
-
-export async function getEnhance(apiKey: string, taskId: string): Promise<EnhanceStatus> {
-  const res = await fetch(`${MEDIAKIT_HOST}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const text = await res.text();
-  let data: TaskResponse;
-  try { data = JSON.parse(text); } catch { return { state: 'failed', progress: 0, error: `MediaKit ${res.status}` }; }
-  if (!res.ok || data.success === false) return { state: 'failed', progress: 0, error: errMsg(data, '增强失败') };
-  const status = String(data.status ?? '').toLowerCase();
-  if (status === 'completed' || status === 'success' || status === 'succeeded') {
-    return { state: 'succeeded', progress: 100, videoUrl: data.result?.video_url };
-  }
-  if (status === 'failed' || status === 'error' || status === 'cancelled') {
-    return { state: 'failed', progress: 0, error: errMsg(data, '增强失败') };
-  }
-  if (status === 'running' || status === 'processing') return { state: 'processing', progress: 50 };
-  return { state: 'queued', progress: 10 }; // pending / queued / unknown
+export async function getEnhance(akSk: string, taskId: string): Promise<EnhanceStatus> {
+  const data = await cvCall(akSk, 'GetVideoEnhanceTask', { TaskId: taskId });
+  if (data.Error) return { state: 'failed', progress: 0, error: data.Error.Message || '增强失败' };
+  const r = data.Result ?? {};
+  const status = String(r.Status ?? '');
+  if (status === 'Success') return { state: 'succeeded', progress: 100, videoUrl: r.VideoUrl as string | undefined };
+  if (status === 'Failed') return { state: 'failed', progress: 0, error: (r.ErrorMessage as string) || '增强失败' };
+  if (status === 'Processing') return { state: 'processing', progress: Number(r.Progress ?? 50) };
+  return { state: 'queued', progress: 10 };
 }

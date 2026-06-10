@@ -91,7 +91,7 @@ type EnhTask = NonNullable<Awaited<ReturnType<typeof getTaskRow>>>;
 const getTaskRow = (db: Db, teamId: string, id: string) =>
   db.select().from(S.generationTasks).where(and(eq(S.generationTasks.id, id), eq(S.generationTasks.teamId, teamId))).get();
 
-/** 画质增强: poll 火山 AI MediaKit (real) when API Key present, else simulate. Writes back the enhanced video URL on success. */
+/** 画质增强: poll 火山 CV MediaKit (real) when AK/SK present, else simulate. Writes back the enhanced video URL on success. */
 async function advanceEnhance(db: Db, env: Env, teamId: string, t: EnhTask): Promise<'queued' | 'running' | 'succeeded' | 'failed'> {
   const cv = (await providerKey(db, teamId, env, 'cv')) ?? null;
   const real = !!cv && !!t.ptid && !t.ptid.startsWith('enh-sim');

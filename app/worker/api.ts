@@ -400,7 +400,7 @@ api.post('/api/shots/:id/enhance', async (c) => {
   const ok = await hold(db, TEAM_ID, cost, { type: 'enhance', id: sid }, actor);
   if (!ok) return c.json({ error: '积分不足' }, 402);
   const taskId = ids.uid('tk');
-  // AI MediaKit needs a Bearer API Key (family 'cv') and a real, publicly-fetchable source video URL.
+  // CV MediaKit needs control-plane AK/SK (family 'cv', stored as "ak:sk") and a real source video URL.
   const cv = await credentialKey(c.env, 'cv');
   let ptid = `enh-sim-${Math.random().toString(16).slice(2, 8)}`;
   let real = false;
@@ -408,7 +408,7 @@ api.post('/api/shots/:id/enhance', async (c) => {
   if (cv) {
     if (!shot.videoUrl || !/^https?:\/\//i.test(shot.videoUrl)) taskError = '该镜头没有可增强的视频 URL（需先生成出真实视频）';
     else {
-      try { ptid = await submitEnhance(cv, { videoUrl: shot.videoUrl, scene: 'aigc', targetRes: res }); real = true; }
+      try { ptid = await submitEnhance(cv, { videoUrl: shot.videoUrl, type, targetRes: res }); real = true; }
       catch (e) { const raw = String(e instanceof Error ? e.message : e); console.error('[shots/enhance] CV submit failed', raw); taskError = friendlyArkError(raw); }
     }
   }
@@ -417,7 +417,7 @@ api.post('/api/shots/:id/enhance', async (c) => {
   await db.insert(S.generationTasks).values({ id: taskId, teamId: TEAM_ID, shot: sid, shotIdx: shot.index, ep: shot.scene, cap: 'video-enhance', model: 'cv-mediakit', provider: 'volcengine', ptid, state: initState, progress: 0, cost, by: actor, error: taskError, created: ids.now(), updated: ids.now() });
   if (taskError) await refund(db, TEAM_ID, cost, { type: 'enhance', id: taskId });
   else await c.env.TASK_QUEUE.send({ taskId, teamId: TEAM_ID });
-  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · ${real ? 'MediaKit task ' + ptid : cv ? '失败' : '模拟'} · 预扣 ${cost}` });
+  await audit(db, TEAM_ID, { actor, action: 'shot.enhance', target: `Shot #${pad2(shot.index)}`, diff: `视频增强 ${res} ${type} · ${real ? 'CV task ' + ptid : cv ? '失败' : '模拟'} · 预扣 ${cost}` });
   return c.json({ ok: true, mode: cv ? 'cv-mediakit' : 'simulation', taskId, ptid, real });
 });
 

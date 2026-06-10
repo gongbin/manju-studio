@@ -33,26 +33,30 @@ function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => voi
   const s = useSettings();
   const qc = useQueryClient();
   const tts = cred.tts;
-  // 火山 数据面 (Ark video) → 'video'; TTS → 'tts'; AI MediaKit 视频增强 API Key → 'cv'.
+  // 火山 数据面 (Ark video) → 'video'; TTS → 'tts'; 控制面 (CV MediaKit AK/SK) → 'cv'.
   const family = tts ? 'tts' : cred.plane === 'control' ? 'cv' : 'video';
   const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.getCredentials });
   const status = creds?.[family];
   const [keyInput, setKeyInput] = useState('');
+  const [ak, setAk] = useState('');
+  const [sk, setSk] = useState('');
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
     try {
-      if (keyInput.trim()) { await api.saveCredential(family, keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
+      if (family === 'cv') {
+        if (ak.trim() && sk.trim()) { await api.saveCredential('cv', `${ak.trim()}:${sk.trim()}`); qc.invalidateQueries({ queryKey: ['credentials'] }); }
+      } else if (keyInput.trim()) { await api.saveCredential(family, keyInput.trim()); qc.invalidateQueries({ queryKey: ['credentials'] }); }
       toast('凭据已加密保存', 'lock');
       onClose();
     } catch (e) { toast('保存失败：' + (e instanceof Error ? e.message : e), 'warn'); setSaving(false); }
   };
-  const removeKey = async () => { await api.deleteCredential(family); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); toast('已删除该 Key', 'trash'); };
+  const removeKey = async () => { await api.deleteCredential(family); qc.invalidateQueries({ queryKey: ['credentials'] }); setKeyInput(''); setAk(''); setSk(''); toast('已删除该 Key', 'trash'); };
   return (
     <div style={{ width: 'min(460px, 94vw)' }}>
       <div className="row gap10" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line)' }}>
         <Icon name={cred.plane === 'control' ? 'lock' : 'cpu'} size={18} className="acc" />
-        <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : 'AI MediaKit · API Key')}</b><div className="faint" style={{ fontSize: 12 }}>{tts ? '配置 TTS base_url / 模型名 / API Key · 支持第三方 / 自建端点' : cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'AI MediaKit 视频画质增强')}</div></div>
+        <div className="grow"><b style={{ fontSize: 15 }}>{cred.name || (cred.plane === 'data' ? '数据面 · API Key' : '控制面 · AK / SK')}</b><div className="faint" style={{ fontSize: 12 }}>{tts ? '配置 TTS base_url / 模型名 / API Key · 支持第三方 / 自建端点' : cred.name ? '配置 Provider 凭据' : '火山方舟 · ' + (cred.plane === 'data' ? 'content_generation 视频生成' : 'CV MediaKit 控制面签名')}</div></div>
         <button className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
       </div>
       <div style={{ padding: 18 }} className="col gap14">
@@ -74,10 +78,11 @@ function CredentialBody({ cred, onClose }: { cred: CredModal; onClose: () => voi
           </>
         ) : (
           <>
-            <label><span className="lbl">AI MediaKit API Key {status?.set && <span className="faint">· 已配置 <span className="mono">{status.hint}</span></span>}</span>
-              <div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder={status?.set ? '留空则保留现有 Key' : '粘贴 AI MediaKit API Key'} /></div></label>
-            {status?.set && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={removeKey}><Icon name="trash" size={13} />删除已保存的 Key</button>}
-            <div className="faint" style={{ fontSize: 11 }}>用于 AI MediaKit 视频画质增强（Authorization: Bearer · cn-beijing）。配置后画质增强走真实火山 API，<b>改 Key 无需重新部署</b>；未配置则走模拟。</div>
+            {status?.set && <div className="faint" style={{ fontSize: 11.5 }}>已配置 AK/SK <span className="mono">{status.hint}</span>（留空则保留）</div>}
+            <label><span className="lbl">Access Key ID（AK）</span><div className="search" style={{ height: 38 }}><Icon name="users" size={15} className="faint" /><input value={ak} onChange={(e) => setAk(e.target.value)} placeholder="AKLT…" /></div></label>
+            <label><span className="lbl">Secret Access Key（SK）</span><div className="search" style={{ height: 38 }}><Icon name="lock" size={15} className="faint" /><input type="password" value={sk} onChange={(e) => setSk(e.target.value)} placeholder="粘贴 Secret Access Key" /></div></label>
+            {status?.set && <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={removeKey}><Icon name="trash" size={13} />删除已保存的 AK/SK</button>}
+            <div className="faint" style={{ fontSize: 11 }}>用于 CV MediaKit 视频画质增强（HMAC v4 签名，cn-beijing）。配置后画质增强走真实火山 API，<b>改后无需重新部署</b>；未配置则走模拟。</div>
           </>
         )}
         <div className="row gap8" style={{ fontSize: 11.5, color: 'var(--text-2)', padding: '9px 11px', background: 'var(--surface-2)', borderRadius: 9 }}><Icon name="shield" size={16} className="acc" /><span>密钥提交后经 AES-GCM 加密落库，仅 Owner / Admin 可写，调用瞬间于服务端内存解密，<b>前端永不回明文</b>。</span></div>
@@ -175,7 +180,7 @@ export function Settings() {
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <div className="row gap12" style={{ padding: 14, borderBottom: '1px solid var(--line)' }}>
                   <span className="av" style={{ width: 34, height: 34, background: 'linear-gradient(140deg,#e8623d,#d4542f)', color: '#fff', fontSize: 15 }}>火</span>
-                  <div className="grow"><div className="row gap8"><b style={{ fontSize: 14 }}>火山方舟 Volcengine</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>视频 · LLM · TTS</span></div><div className="mono faint" style={{ fontSize: 11, marginTop: 3 }}>volcengine · 双 API Key（方舟数据面 + AI MediaKit 视频增强）</div></div>
+                  <div className="grow"><div className="row gap8"><b style={{ fontSize: 14 }}>火山方舟 Volcengine</b><span className="tag" style={{ height: 19, fontSize: 10.5 }}>视频 · LLM · TTS</span></div><div className="mono faint" style={{ fontSize: 11, marginTop: 3 }}>volcengine · 双凭据平面（数据面 API Key + 控制面 AK/SK）</div></div>
                   <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />已启用</span>
                 </div>
                 <div className="row gap12" style={{ padding: '12px 14px', borderBottom: '1px solid var(--line)' }}>
@@ -185,7 +190,7 @@ export function Settings() {
                 </div>
                 <div className="row gap12" style={{ padding: '12px 14px' }}>
                   <Icon name="lock" size={16} className="faint" />
-                  <div className="grow"><div className="row gap8 wrap"><b style={{ fontSize: 13 }}>AI MediaKit · API Key</b><span className="tag" style={{ height: 18, fontSize: 10 }}>视频画质增强</span>{creds?.['cv']?.set ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />已配置 {creds['cv'].hint}</span> : <span className="pill" style={{ color: 'var(--st-draft)', background: 'var(--st-draft-bg)' }}>未配置 · 走模拟</span>}</div><div className="faint" style={{ fontSize: 11, marginTop: 2 }}>AI MediaKit · Authorization: Bearer（cn-beijing）</div></div>
+                  <div className="grow"><div className="row gap8 wrap"><b style={{ fontSize: 13 }}>控制面 · AK / SK</b><span className="tag" style={{ height: 18, fontSize: 10 }}>视频画质增强</span>{creds?.['cv']?.set ? <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="check" size={11} />已配置 {creds['cv'].hint}</span> : <span className="pill" style={{ color: 'var(--st-draft)', background: 'var(--st-draft-bg)' }}>未配置 · 走模拟</span>}</div><div className="faint" style={{ fontSize: 11, marginTop: 2 }}>CV MediaKit · HMAC-SHA256 v4 签名（cn-beijing）</div></div>
                   <button className="btn btn-ghost btn-sm" onClick={() => setCred({ plane: 'control' })}>{creds?.['cv']?.set ? '更新' : '配置'}</button>
                 </div>
               </div>

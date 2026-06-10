@@ -4,9 +4,9 @@ import { Screen, Crumb } from '@/app/Shell';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
 import { Modal } from '@/ui/dialog';
-import { Switch } from '@/ui/controls';
 import { Thumb, Avatar } from '@/ui/primitives';
 import { Progress } from '@/ui/controls';
+import { AssetPicker } from '@/ui/asset-picker';
 import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
@@ -15,6 +15,7 @@ import { useSettings, settingsStore, STORAGE_LABEL, STORAGE_SHORT } from '@/lib/
 import { PERMS, PERM_LABEL, ROLE_PERMS, ROLE_DESC, effectiveRole } from '@/lib/rbac';
 import type { Asset, Character, Member, Role } from '@/lib/types';
 
+const isHttpUrl = (u?: string) => !!u && /^https?:\/\//i.test(u);
 const TONES: [string, string][] = [['b', '青紫'], ['a', '暗棕'], ['c', '暖褐'], ['d', '青绿']];
 const TAGS = ['男主', '女主', '配角', '反派', '群演'];
 function chipStyle(on: boolean) {
@@ -29,7 +30,11 @@ function NewCharacterModal({ open, editing, onClose }: { open: boolean; editing?
   const [tone, setTone] = useState('b');
   const [voice, setVoice] = useState('');
   const [desc, setDesc] = useState('');
-  const [asset, setAsset] = useState(true);
+  const isUrl = (u?: string) => !!u && /^https?:\/\//i.test(u);
+  const [refUrl, setRefUrl] = useState('');
+  const [pick, setPick] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!open) return;
     setName(editing?.name ?? '');
@@ -37,11 +42,23 @@ function NewCharacterModal({ open, editing, onClose }: { open: boolean; editing?
     setTone(editing?.tone ?? 'b');
     setVoice(editing?.voice ?? '');
     setDesc(editing?.desc ?? '');
-    setAsset(editing ? !!editing.asset : true);
+    setRefUrl(isUrl(editing?.asset) ? editing!.asset : '');
   }, [open, editing]);
+  const uploadRef = async (fl: FileList | null) => {
+    const f = fl?.[0];
+    if (!f) return;
+    setUploading(true);
+    try {
+      const r = await api.uploadFile(f);
+      setRefUrl(r.url);
+      const dot = f.name.lastIndexOf('.');
+      try { await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind: 'image', ext: dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : 'png', size: fmtBytes(f.size), tone: tone as never, url: r.url }); qc.invalidateQueries({ queryKey: ['assets'] }); } catch { /* 入库失败不影响绑定 */ }
+    } catch (e) { toast('上传失败：' + (e instanceof Error ? e.message : e), 'warn'); }
+    finally { setUploading(false); }
+  };
   const submit = async () => {
     if (!name.trim()) return;
-    const data = { name: name.trim(), tag, tone, voice: voice.trim() || '未设定', desc: desc.trim(), asset };
+    const data = { name: name.trim(), tag, tone, voice: voice.trim() || '未设定', desc: desc.trim(), assetUrl: refUrl.trim() };
     if (editing) { await api.updateCharacter(editing.id, data); toast('已更新角色 · ' + name.trim(), 'check'); }
     else { await api.addCharacter(data); toast('已新建角色 · ' + name.trim(), 'users'); }
     qc.invalidateQueries({ queryKey: ['characters'] });
@@ -64,10 +81,24 @@ function NewCharacterModal({ open, editing, onClose }: { open: boolean; editing?
           <label><span className="lbl">角色设定 / 外观</span>
             <textarea className="field" rows={3} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="服饰、神态、关键特征…用于参考图与一致性提示" /></label>
           <div><div className="lbl">封面调性</div><div className="row gap8">{TONES.map(([tk, tl]) => <button key={tk} onClick={() => setTone(tk)} style={{ flex: 1, cursor: 'pointer', borderRadius: 9, overflow: 'hidden', border: '2px solid ' + (tone === tk ? 'var(--accent)' : 'transparent'), padding: 0 }}><Thumb w="100%" h={42} tone={tk} rounded={0} label={tl} /></button>)}</div></div>
-          <div className="row gap10" style={{ alignItems: 'center', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}>
-            <div className="grow"><div style={{ fontSize: 13, fontWeight: 600 }}>建立一致性资产</div><div className="faint" style={{ fontSize: 11.5 }}>生成 asset:// 资产，生成镜头时自动注入为 reference_image</div></div>
-            <Switch checked={asset} onChange={setAsset} />
+          <div className="col gap8" style={{ padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}>
+            <div className="row gap10" style={{ alignItems: 'center' }}>
+              {refUrl
+                ? <img src={refUrl} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: 'cover', flex: '0 0 auto' }} />
+                : <span className="center" style={{ width: 52, height: 52, borderRadius: 8, background: 'var(--surface-3, var(--line))', color: 'var(--text-3)', flex: '0 0 auto' }}><Icon name="image" size={20} /></span>}
+              <div className="grow" style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>一致性参考图</div>
+                <div className="faint" style={{ fontSize: 11.5 }}>{refUrl ? '生成镜头时作为 reference_image 注入，保持角色一致性' : '从素材库选择或上传一张参考图（需可公开访问）'}</div>
+              </div>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { void uploadRef(e.target.files); e.target.value = ''; }} />
+            <div className="row gap6">
+              <button className="btn btn-soft btn-sm grow" onClick={() => setPick(true)}><Icon name="image" size={13} />素材库选择</button>
+              <button className="btn btn-ghost btn-sm grow" disabled={uploading} onClick={() => fileRef.current?.click()}><Icon name={uploading ? 'refresh' : 'upload'} size={13} className={uploading ? 'spin' : ''} />{uploading ? '上传中' : '上传'}</button>
+              {refUrl && <button className="btn btn-ghost btn-sm" onClick={() => setRefUrl('')}><Icon name="x" size={13} />清除</button>}
+            </div>
           </div>
+          {pick && <AssetPicker kind="image" multiple={false} onPick={(items) => items[0] && setRefUrl(items[0].url)} onClose={() => setPick(false)} />}
         </div>
         <div className="row gap8" style={{ padding: 16, borderTop: '1px solid var(--line)' }}>
           <button className="btn btn-ghost grow" onClick={onClose}>取消</button>
@@ -97,7 +128,9 @@ export function Characters() {
           {characters.map((c) => (
             <div key={c.id} className="card" style={{ overflow: 'hidden' }}>
               <div style={{ position: 'relative' }}>
-                <Thumb w="100%" h={140} tone={c.tone} rounded={0} label={`REF ×${c.refs}`} />
+                {isHttpUrl(c.asset)
+                  ? <img src={c.asset} alt={c.name} style={{ width: '100%', height: 140, objectFit: 'cover', display: 'block' }} />
+                  : <Thumb w="100%" h={140} tone={c.tone} rounded={0} label={`REF ×${c.refs}`} />}
                 <div style={{ position: 'absolute', top: 8, right: 8 }} className="row gap6">
                   {c.asset && <span className="pill" style={{ color: 'var(--st-done)', background: 'var(--st-done-bg)' }}><Icon name="link" size={11} />一致性</span>}
                   <span className="tag" style={{ height: 21 }}>{c.tag}</span>

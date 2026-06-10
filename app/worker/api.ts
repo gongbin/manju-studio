@@ -176,10 +176,10 @@ api.post('/api/episodes', async (c) => {
 });
 
 api.post('/api/characters', async (c) => {
-  const d = await c.req.json<{ name: string; tag?: string; tone?: string; voice?: string; desc?: string; asset?: boolean; project?: string }>();
+  const d = await c.req.json<{ name: string; tag?: string; tone?: string; voice?: string; desc?: string; assetUrl?: string; project?: string }>();
   const db = getDb(c.env);
   const id = 'c_' + Math.random().toString(36).slice(2, 7);
-  await db.insert(S.characters).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', name: d.name, tone: d.tone ?? 'a', voice: d.voice ?? '', tag: d.tag ?? '配角', refs: 0, asset: d.asset ? `asset://qm/${id}` : '', desc: d.desc ?? '' });
+  await db.insert(S.characters).values({ id, teamId: TEAM_ID, project: d.project ?? 'p_qm', name: d.name, tone: d.tone ?? 'a', voice: d.voice ?? '', tag: d.tag ?? '配角', refs: 0, asset: (d.assetUrl ?? '').trim(), desc: d.desc ?? '' });
   await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'character.create', target: d.name, diff: '新建角色' });
   return c.json({ id });
 });
@@ -196,10 +196,9 @@ api.post('/api/assets', async (c) => {
 
 api.patch('/api/characters/:id', async (c) => {
   const id = c.req.param('id');
-  const d = await c.req.json<{ name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean }>();
+  const d = await c.req.json<{ name: string; tag: string; tone: string; voice: string; desc: string; assetUrl?: string }>();
   const db = getDb(c.env);
-  const existing = await db.select().from(S.characters).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID))).get();
-  const asset = d.asset ? (existing?.asset || `asset://qm/${id}`) : '';
+  const asset = (d.assetUrl ?? '').trim();
   await db.update(S.characters).set({ name: d.name, tag: d.tag, tone: d.tone, voice: d.voice, desc: d.desc, asset }).where(and(eq(S.characters.id, id), eq(S.characters.teamId, TEAM_ID)));
   await audit(db, TEAM_ID, { actor: (await sessionUser(c)) ?? 'u_lin', action: 'character.update', target: d.name, diff: '编辑角色' });
   return c.json({ ok: true });
@@ -348,7 +347,7 @@ api.patch('/api/shots/:id', async (c) => {
 });
 
 api.post('/api/shots/generate', async (c) => {
-  const { ids: shotIds, model, total } = await c.req.json<{ ids: string[]; model: string; total: number }>();
+  const { ids: shotIds, model, total, charIds } = await c.req.json<{ ids: string[]; model: string; total: number; charIds?: string[] }>();
   const db = getDb(c.env);
   const actor = (await sessionUser(c)) ?? 'u_lin';
   const ok = await hold(db, TEAM_ID, total, { type: 'generation_batch', id: shotIds.join(',') }, actor);
@@ -356,6 +355,14 @@ api.post('/api/shots/generate', async (c) => {
   const per = Math.round(total / Math.max(1, shotIds.length));
   // Ark key: platform-configured (火山 数据面) first, then env fallback. Null → simulate.
   const arkKey = (await credentialKey(c.env, 'video')) ?? c.env.VOLC_ARK_API_KEY ?? null;
+  // 用户在批量生成弹窗显式勾选的主角 → 一致性参考图（取真实可访问的 http(s) URL）。
+  const isUrl = (u?: string | null): u is string => !!u && /^https?:\/\//i.test(u);
+  const explicitChars = Array.isArray(charIds); // 弹窗显式传了选择（即使为空 = 不注入角色）
+  let selectedCharAssets: string[] = [];
+  if (charIds?.length) {
+    const rows = await Promise.all(charIds.map((cid) => db.select().from(S.characters).where(eq(S.characters.id, cid)).get()));
+    selectedCharAssets = [...new Set(rows.map((r) => r?.asset).filter(isUrl))];
+  }
   const created: { id: string; shot: string; ptid: string; real: boolean }[] = [];
   for (const sid of shotIds) {
     const shot = await db.select().from(S.shots).where(eq(S.shots.id, sid)).get();
@@ -365,13 +372,16 @@ api.post('/api/shots/generate', async (c) => {
     let ptid = `cgt-${Math.random().toString(16).slice(2, 8)}`;
     let real = false;
     let taskError: string | null = null;
-    // Per-shot references (each scene uploads its own) + first character asset for consistency.
-    let charAsset: string | undefined;
-    for (const cid of shot.chars ?? []) {
-      const ch = await db.select().from(S.characters).where(eq(S.characters.id, cid)).get();
-      if (ch?.asset) { charAsset = ch.asset; break; }
+    // Per-shot references (each scene uploads its own) + 角色一致性参考图。
+    // 优先用弹窗显式勾选的主角；否则回退到镜头自身角色中第一个有 URL 资产的。
+    let charAssets = selectedCharAssets;
+    if (!charAssets.length && !explicitChars) {
+      for (const cid of shot.chars ?? []) {
+        const ch = await db.select().from(S.characters).where(eq(S.characters.id, cid)).get();
+        if (isUrl(ch?.asset)) { charAssets = [ch!.asset]; break; }
+      }
     }
-    const references = { images: shot.refs?.images ?? [], videos: shot.refs?.videos ?? [], audios: shot.refs?.audios ?? [], characterAssetId: charAsset };
+    const references = { images: shot.refs?.images ?? [], videos: shot.refs?.videos ?? [], audios: shot.refs?.audios ?? [], characterAssets: charAssets };
     try {
       const pt = await registry.videoProvider()!.createTask({ modelId: shot.model || model, capability: cap, prompt: shot.prompt, params: shot.params, references }, arkKey);
       if (pt) { ptid = pt.providerTaskId; real = true; }

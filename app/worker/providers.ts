@@ -11,7 +11,7 @@ export interface GenerateInput {
   capability: Capability;
   prompt: { visual?: string; dialogue?: string; voiceover?: string; soundEffects?: string; cameraPosition?: string; cameraMovement?: string };
   params: { resolution?: string; ratio?: string; duration?: number; generateAudio?: boolean; watermark?: boolean; webSearch?: boolean };
-  references?: { images?: string[]; videos?: string[]; audios?: string[]; characterAssetId?: string };
+  references?: { images?: string[]; videos?: string[]; audios?: string[]; characterAssetId?: string; characterAssets?: string[] };
 }
 
 export interface ProviderTask {
@@ -54,8 +54,9 @@ export class VolcengineProvider implements VideoProvider {
     for (const url of (input.references?.images ?? []).filter(ok)) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
     for (const url of (input.references?.videos ?? []).filter(ok)) content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
     for (const url of (input.references?.audios ?? []).filter(ok)) content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
-    const charRef = input.references?.characterAssetId;
-    if (charRef && ok(charRef)) content.push({ type: 'image_url', image_url: { url: charRef }, role: 'reference_image' });
+    // 角色一致性参考图（可多个）——选中的主角参考图注入为 reference_image。
+    const charAssets = input.references?.characterAssets ?? (input.references?.characterAssetId ? [input.references.characterAssetId] : []);
+    for (const url of [...new Set(charAssets)].filter(ok)) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
 
     const p = input.params;
     const body: Record<string, unknown> = {

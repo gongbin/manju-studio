@@ -8,7 +8,8 @@ import { Check, Progress } from '@/ui/controls';
 import { toast } from '@/ui/toast';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/format';
-import { models, characters, charOf, wallet as walletSeed } from '@/lib/mock';
+import { AssetPicker } from '@/ui/asset-picker';
+import { models, characters as charSeed, wallet as walletSeed } from '@/lib/mock';
 import { useSettings, ruleFor, priceYuan, yuanToCredits } from '@/lib/settings';
 import type { Shot, ShotRefs, TimeBeat } from '@/lib/types';
 
@@ -27,12 +28,17 @@ function Toggle({ on, set, label }: { on: boolean; set: (v: boolean) => void; la
 }
 
 interface RefItem { label: string; url: string }
-function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
-  icon: string; label: string; max: number; on: boolean; accept: string; multiple: boolean;
+const fmtSize = (n: number) => (n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : n >= 1 << 10 ? Math.round(n / (1 << 10)) + ' KB' : n + ' B');
+const REF_TONES = ['a', 'b', 'c', 'd'];
+
+function RefZone({ icon, label, kind, max, on, accept, multiple, items, setItems }: {
+  icon: string; label: string; kind: 'image' | 'video' | 'audio'; max: number; on: boolean; accept: string; multiple: boolean;
   items: RefItem[]; setItems: (v: RefItem[]) => void;
 }) {
+  const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState(false);
   const full = items.length >= max;
   const addFiles = async (fl: FileList | null) => {
     if (!fl) return;
@@ -41,8 +47,18 @@ function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
     setBusy(true);
     try {
       const uploaded: RefItem[] = [];
-      for (const f of files) { const r = await api.uploadFile(f); uploaded.push({ label: f.name, url: r.url }); }
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const r = await api.uploadFile(f);
+        uploaded.push({ label: f.name, url: r.url });
+        // 入素材库，方便以后复用（非致命）。
+        const dot = f.name.lastIndexOf('.');
+        try {
+          await api.addAsset({ name: dot >= 0 ? f.name.slice(0, dot) : f.name, kind, ext: dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : kind, size: fmtSize(f.size), tone: REF_TONES[(items.length + i) % 4], url: r.url });
+        } catch { /* 入库失败不影响本次引用 */ }
+      }
       setItems([...items, ...uploaded]);
+      qc.invalidateQueries({ queryKey: ['assets'] });
     } catch (e) { toast('上传失败：' + (e instanceof Error ? e.message : e), 'warn'); }
     finally { setBusy(false); }
   };
@@ -62,7 +78,7 @@ function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
         <div className="col gap3" style={{ marginBottom: 6 }}>
           {items.map((it, i) => (
             <div key={i} className="row gap4" style={{ fontSize: 10, padding: '2px 5px', background: 'var(--surface-2)', borderRadius: 5 }}>
-              <Icon name="check" size={10} className="acc" />
+              {kind === 'image' ? <img src={it.url} alt="" style={{ width: 16, height: 16, borderRadius: 3, objectFit: 'cover', flex: '0 0 auto' }} /> : <Icon name="check" size={10} className="acc" />}
               <span className="grow ellipsis" title={it.url}>{it.label}</span>
               <button className="icon-btn" style={{ width: 16, height: 16 }} onClick={() => setItems(items.filter((_, x) => x !== i))}><Icon name="x" size={10} /></button>
             </div>
@@ -71,8 +87,10 @@ function RefZone({ icon, label, max, on, accept, multiple, items, setItems }: {
       )}
       <div className="row gap4">
         <button className="btn btn-soft" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full || busy} onClick={() => inputRef.current?.click()}>{busy ? '上传中' : 'Upload'}</button>
+        <button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full || busy} onClick={() => setPick(true)} title="从素材库选择">素材库</button>
         <button className="btn btn-ghost" style={{ height: 24, fontSize: 11, flex: 1, padding: 0 }} disabled={!on || full || busy} onClick={addUrl}>URL</button>
       </div>
+      {pick && <AssetPicker kind={kind} max={max - items.length} existingUrls={items.map((i) => i.url)} onPick={(picked) => setItems([...items, ...picked])} onClose={() => setPick(false)} />}
     </div>
   );
 }
@@ -84,6 +102,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   const qc = useQueryClient();
   const s = useSettings();
   const { data: wallet = walletSeed } = useQuery({ queryKey: ['wallet'], queryFn: api.getWallet, initialData: walletSeed });
+  const { data: characters = charSeed } = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters, initialData: charSeed });
   const def = s.defaults;
   const initModel = models.find((m) => m.id === (shots[0]?.model ?? def.model)) || models[0];
   const [modelId, setModelId] = useState(shots[0]?.model ?? def.model);
@@ -98,6 +117,11 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
   const [beats, setBeats] = useState<TimeBeat[]>(() => (shots[0]?.beats ?? []).map((b) => ({ ...b })));
   const [refs, setRefs] = useState<Record<string, Buckets>>(() => Object.fromEntries(shots.map((sh) => [sh.id, emptyBuckets()])));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(shots.length === 1 ? [shots[0].id] : []));
+  // 角色一致性：可勾选的主角（默认预选所选镜头里、且已绑定参考图的角色）。
+  const isCharUrl = (u?: string) => !!u && /^https?:\/\//i.test(u);
+  const shotCharIds = new Set(shots.flatMap((sh) => sh.chars));
+  const [selChars, setSelChars] = useState<Set<string>>(() => new Set(characters.filter((c) => shotCharIds.has(c.id) && isCharUrl(c.asset)).map((c) => c.id)));
+  const toggleChar = (id: string) => setSelChars((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const single = shots.length === 1;
   const rule = ruleFor(s, modelId);
@@ -113,9 +137,9 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
     const b = refs[id] ?? emptyBuckets();
     return (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        <RefZone icon="image" label="Images" max={9} on={model.refImg} accept="image/*" multiple items={b.images} setItems={(v) => setBucket(id, 'images', v)} />
-        <RefZone icon="film" label="Video" max={3} on={model.refVid} accept="video/*" multiple items={b.videos} setItems={(v) => setBucket(id, 'videos', v)} />
-        <RefZone icon="mic" label="Audio" max={3} on={model.refAud} accept="audio/*" multiple items={b.audios} setItems={(v) => setBucket(id, 'audios', v)} />
+        <RefZone icon="image" label="Images" kind="image" max={9} on={model.refImg} accept="image/*" multiple items={b.images} setItems={(v) => setBucket(id, 'images', v)} />
+        <RefZone icon="film" label="Video" kind="video" max={3} on={model.refVid} accept="video/*" multiple items={b.videos} setItems={(v) => setBucket(id, 'videos', v)} />
+        <RefZone icon="mic" label="Audio" kind="audio" max={3} on={model.refAud} accept="audio/*" multiple items={b.audios} setItems={(v) => setBucket(id, 'audios', v)} />
       </div>
     );
   };
@@ -132,7 +156,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
       if (single) { patch.prompt = { ...prompt } as Shot['prompt']; patch.beats = beats; }
       await api.updateShot(sh.id, patch);
     }
-    await api.submitGenerate(shots.map((sh) => sh.id), { model: modelId, resolution: res, ratio, duration: dur, generateAudio: !!audio, watermark: !!wm }, totalCredits, refsPayload);
+    await api.submitGenerate(shots.map((sh) => sh.id), { model: modelId, resolution: res, ratio, duration: dur, generateAudio: !!audio, watermark: !!wm }, totalCredits, refsPayload, model.charAsset ? [...selChars] : undefined);
     qc.invalidateQueries({ queryKey: ['shots'] });
     qc.invalidateQueries({ queryKey: ['tasks'] });
     qc.invalidateQueries({ queryKey: ['wallet'] });
@@ -241,20 +265,31 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
           )}
         </div>
 
-        {model.charAsset && (
-          <div>
-            <div className="row gap8" style={{ marginBottom: 3 }}><Icon name="users" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>公共人像 / 角色一致性</b></div>
-            <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>角色 asset:// 资产自动注入为 reference_image</div>
-            <div className="col gap6">
-              {[...new Set(shots.flatMap((s) => s.chars))].map(charOf).filter((c): c is NonNullable<typeof c> => !!c && !!c.asset).map((c) => (
-                <div key={c.id} className="row gap8" style={{ padding: '6px 8px', background: 'var(--surface-2)', borderRadius: 8, fontSize: 12 }}>
-                  <Avatar name={c.name} size={20} /><b>{c.name}</b><span className="grow ellipsis mono faint" style={{ fontSize: 10.5 }}>{c.asset}</span>
-                </div>
-              ))}
-              {characters.filter((c) => shots.flatMap((s) => s.chars).includes(c.id) && c.asset).length === 0 && <div className="faint" style={{ fontSize: 12 }}>所选镜头暂无角色一致性资产</div>}
+        {model.charAsset && (() => {
+          const withRef = characters.filter((c) => isCharUrl(c.asset));
+          const needRef = characters.filter((c) => shotCharIds.has(c.id) && !isCharUrl(c.asset));
+          return (
+            <div>
+              <div className="row gap8" style={{ marginBottom: 3 }}><Icon name="users" size={15} className="acc" /><b style={{ fontSize: 13.5 }}>公共人像 / 角色一致性</b>{selChars.size > 0 && <span className="tag" style={{ height: 18, fontSize: 10, color: 'var(--accent-text)' }}>已选 {selChars.size}</span>}</div>
+              <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>勾选本次出镜的主角，其参考图将作为 reference_image 注入，保持跨镜头一致性</div>
+              {withRef.length === 0
+                ? <div className="faint" style={{ fontSize: 12 }}>暂无已绑定参考图的角色 —— 到「角色库」为主角绑定一张参考图后即可在此勾选。</div>
+                : <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {withRef.map((c) => {
+                      const on = selChars.has(c.id);
+                      return (
+                        <div key={c.id} onClick={() => toggleChar(c.id)} className="row gap8" style={{ cursor: 'pointer', padding: '6px 8px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--accent-line)' : 'var(--line-2)'), background: on ? 'var(--accent-soft)' : 'var(--surface-2)' }}>
+                          <Check checked={on} onChange={() => toggleChar(c.id)} />
+                          {isCharUrl(c.asset) ? <img src={c.asset} alt="" style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto' }} /> : <Avatar name={c.name} size={24} />}
+                          <div className="grow" style={{ minWidth: 0 }}><div className="row gap6"><b style={{ fontSize: 12.5 }}>{c.name}</b><span className="tag" style={{ height: 16, fontSize: 9.5 }}>{c.tag}</span></div></div>
+                        </div>
+                      );
+                    })}
+                  </div>}
+              {needRef.length > 0 && <div className="faint" style={{ fontSize: 11, marginTop: 8 }}>所选镜头中 {needRef.map((c) => c.name).join('、')} 尚未绑定参考图，去「角色库」绑定后可参与一致性。</div>}
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       <div style={{ borderTop: '1px solid var(--line)', padding: 16 }}>

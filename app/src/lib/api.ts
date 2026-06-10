@@ -144,12 +144,12 @@ export const api = {
     );
   },
 
-  async addCharacter(data: { name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean; project?: string }): Promise<string> {
+  async addCharacter(data: { name: string; tag: string; tone: string; voice: string; desc: string; assetUrl?: string; project?: string }): Promise<string> {
     return remoteOrLocal(
       async () => (await req<{ id: string }>('/characters', { method: 'POST', body: JSON.stringify(data) })).id,
       () => {
         const id = 'c_' + Math.random().toString(36).slice(2, 7);
-        store.characters = [{ id, name: data.name, project: data.project || 'p_qm', tone: data.tone as never, voice: data.voice, tag: data.tag, refs: 0, asset: data.asset ? `asset://qm/${id}` : '', desc: data.desc }, ...store.characters];
+        store.characters = [{ id, name: data.name, project: data.project || 'p_qm', tone: data.tone as never, voice: data.voice, tag: data.tag, refs: 0, asset: (data.assetUrl ?? '').trim(), desc: data.desc }, ...store.characters];
         return id;
       },
     );
@@ -166,12 +166,12 @@ export const api = {
     );
   },
 
-  async updateCharacter(id: string, data: { name: string; tag: string; tone: string; voice: string; desc: string; asset: boolean }) {
+  async updateCharacter(id: string, data: { name: string; tag: string; tone: string; voice: string; desc: string; assetUrl?: string }) {
     return remoteOrLocal(
       () => req(`/characters/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
       () => {
         store.characters = store.characters.map((c) => (c.id === id
-          ? { ...c, name: data.name, tag: data.tag, tone: data.tone as never, voice: data.voice, desc: data.desc, asset: data.asset ? (c.asset || `asset://qm/${id}`) : '' }
+          ? { ...c, name: data.name, tag: data.tag, tone: data.tone as never, voice: data.voice, desc: data.desc, asset: (data.assetUrl ?? '').trim() }
           : c));
         return { ok: true };
       },
@@ -265,9 +265,10 @@ export const api = {
     params: { model: string; resolution?: string; ratio?: string; duration?: number | 'smart'; generateAudio?: boolean; watermark?: boolean },
     total: number,
     refs?: Record<string, ShotRefs>,
+    charIds?: string[],
   ) {
     return remoteOrLocal(
-      () => req('/shots/generate', { method: 'POST', body: JSON.stringify({ ids: shotIds, model: params.model, params, refs, total }) }),
+      () => req('/shots/generate', { method: 'POST', body: JSON.stringify({ ids: shotIds, model: params.model, params, refs, total, charIds }) }),
       () => { localGenerate(shotIds, params, total); return { ok: true }; },
     );
   },

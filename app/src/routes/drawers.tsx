@@ -15,6 +15,16 @@ import type { Shot, ShotRefs, TimeBeat } from '@/lib/types';
 
 const yuan = (n: number) => '¥' + (n < 10 ? n.toFixed(2) : n.toFixed(1));
 
+/** Full-screen mask + centered spinner, shown while an action is being submitted. */
+function SubmitOverlay({ label = '提交中…' }: { label?: string }) {
+  return (
+    <div className="submit-overlay" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden />
+      <span className="label">{label}</span>
+    </div>
+  );
+}
+
 function ChipBtn({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
   return <button onClick={onClick} className="tag" style={{ height: 28, cursor: 'pointer', background: on ? 'var(--accent-soft)' : undefined, borderColor: on ? 'var(--accent-line)' : undefined, color: on ? 'var(--accent-text)' : undefined }}>{label}</button>;
 }
@@ -176,6 +186,7 @@ export function GenerationDrawer({ shots, onClose }: { shots: Shot[]; onClose: (
 
   return (
     <Drawer open onClose={onClose}>
+      {submitting && <SubmitOverlay />}
       <div className="row gap10" style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
         <Icon name="sparkle" size={18} className="acc" />
         <div className="grow"><b style={{ fontSize: 15 }}>提交镜头生成</b><div className="faint" style={{ fontSize: 12 }}>{shots.length} 个镜头 · 基础参数共用 · 参考素材各镜头独立 · 逐条提交</div></div>
@@ -351,6 +362,7 @@ export function EnhanceDrawer({ shot, onClose }: { shot: Shot; onClose: () => vo
 
   return (
     <Drawer open onClose={onClose}>
+      {submitting && <SubmitOverlay label="提交增强…" />}
       <div className="row gap10" style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
         <Icon name="bolt" size={18} className="acc" />
         <div className="grow"><b style={{ fontSize: 15 }}>视频画质增强</b><div className="faint" style={{ fontSize: 12 }}>火山 CV MediaKit · SubmitVideoEnhanceTask · 走控制面 AK/SK</div></div>

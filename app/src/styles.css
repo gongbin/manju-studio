@@ -226,10 +226,11 @@ textarea.field { height: auto; padding: 9px 11px; resize: vertical; line-height:
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-/* App-wide top loading bar (react-query fetching / mutating). */
-.global-loadbar { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 9999; background: var(--accent-soft); overflow: hidden; pointer-events: none; }
-.global-loadbar::before { content: ''; position: absolute; top: 0; bottom: 0; width: 35%; background: var(--accent); border-radius: 2px; animation: loadbar 1.1s ease-in-out infinite; }
-@keyframes loadbar { 0% { left: -35%; } 60% { left: 100%; } 100% { left: 100%; } }
+/* Submit overlay: full-screen mask + centered spinner, shown while an action is being submitted. */
+.submit-overlay { position: fixed; inset: 0; z-index: 12000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(10, 12, 18, 0.42); backdrop-filter: blur(2px); animation: fadeIn 0.15s ease both; }
+.submit-overlay .spinner { width: 38px; height: 38px; border-radius: 50%; border: 3px solid var(--accent-soft); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
+.submit-overlay .label { font-size: 13px; font-weight: 600; color: #fff; letter-spacing: 0.02em; }
+@keyframes fadeIn { from { opacity: 0; } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } }
 .rise { animation: riseIn 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 

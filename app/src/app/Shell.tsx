@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Outlet, useRouterState } from '@tanstack/react-router';
-import { useQuery, useIsFetching, useIsMutating } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Icon } from '@/ui/icon';
 import { Menu } from '@/ui/menu';
 import { Avatar } from '@/ui/primitives';
@@ -179,19 +179,11 @@ export function Screen({ crumb, children }: { crumb?: ReactNode; children: React
   );
 }
 
-/** App-wide thin top bar that animates whenever any query is fetching or any mutation is running. */
-function GlobalLoadingBar() {
-  const active = useIsFetching() + useIsMutating();
-  if (!active) return null;
-  return <div className="global-loadbar" aria-hidden />;
-}
-
 export function ShellLayout() {
   const [open, setOpen] = useState(false);
   return (
     <MobileNavCtx.Provider value={{ open, setOpen }}>
       <div className={'app' + (open ? ' nav-open' : '')}>
-        <GlobalLoadingBar />
         <Sidebar />
         <div className="main-col">
           <Outlet />
